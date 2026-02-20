@@ -1,24 +1,46 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
+	"os"
 
-	// Sesuaikan dengan module name yang kamu buat di go mod init tadi
-	"walletx-be/internal/handlers"
+	"walletx-be/internal/workers"
+	"github.com/sirupsen/logrus"
 )
 
+
+func init() {
+	// Standarisasi Logrus Global
+	logrus.SetFormatter(&logrus.JSONFormatter{})
+	logrus.SetOutput(os.Stdout)
+	logrus.SetLevel(logrus.InfoLevel)
+}
+
 func main() {
-	// 1. Tentukan Route (Jalur API)
-	http.HandleFunc("/api/status", handlers.GetWalletStatus)
+	logrus.Info("🚀 Memulai Aplikasi WalletX...")
 
-	// 2. Tentukan Port
-	port := ":8080"
-	fmt.Println("Server WalletX berjalan di http://localhost" + port)
+	// Kredensial Bot
+	emailBot := "walletxforyourfuture@gmail.com"
+	appPassword := "ihytzwlhrjiapknn"
 
-	// 3. Jalankan Server
-	err := http.ListenAndServe(port, nil)
+	// Inisialisasi Service
+	logrus.WithFields(logrus.Fields{
+		"email": emailBot,
+	}).Info("Menginisialisasi Service")
+	txService := services.NewTransactionService()
+
+	// Mencatat event spesifik menggunakan WithFields
+	logrus.WithFields(logrus.Fields{
+		"email": emailBot,
+	}).Info("Menginisialisasi IMAP Worker")
+
+	// Menjalankan Worker
+	worker := workers.NewIMAPWorker(emailBot, appPassword, txService)
+	err := worker.ProcessUnseenEmails()
+	
 	if err != nil {
-		fmt.Printf("Gagal menjalankan server: %v\n", err)
+		// Menggunakan .WithError untuk standarisasi log error
+		logrus.WithError(err).Error("❌ IMAP Worker berhenti karena error")
+	} else {
+		logrus.Info("✅ IMAP Worker berhasil dieksekusi")
 	}
 }
