@@ -16,31 +16,27 @@ func init() {
 }
 
 func main() {
-	logrus.Info("🚀 Memulai Aplikasi WalletX...")
+    logrus.Info("🚀 Memulai Aplikasi WalletX...")
 
-	// Kredensial Bot
-	emailBot := "walletxforyourfuture@gmail.com"
-	appPassword := "ihytzwlhrjiapknn"
+    // 1. Load Configuration
+    cfg := config.Load()
 
-	// Inisialisasi Service
-	logrus.WithFields(logrus.Fields{
-		"email": emailBot,
-	}).Info("Menginisialisasi Service")
-	txService := services.NewTransactionService()
+    // 2. Inisialisasi Service
+    txService := services.NewTransactionService()
 
-	// Mencatat event spesifik menggunakan WithFields
-	logrus.WithFields(logrus.Fields{
-		"email": emailBot,
-	}).Info("Menginisialisasi IMAP Worker")
+    // 3. Menjalankan Worker menggunakan data dari Config
+    logrus.WithFields(logrus.Fields{
+        "bot_email": cfg.IMAP.Email,
+    }).Info("Menginisialisasi IMAP Worker")
 
-	// Menjalankan Worker
-	worker := workers.NewIMAPWorker(emailBot, appPassword, txService)
-	err := worker.ProcessUnseenEmails()
-	
-	if err != nil {
-		// Menggunakan .WithError untuk standarisasi log error
-		logrus.WithError(err).Error("❌ IMAP Worker berhenti karena error")
-	} else {
-		logrus.Info("✅ IMAP Worker berhasil dieksekusi")
-	}
+    // Ambil kredensial langsung dari object cfg
+    worker := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
+    
+    err := worker.ProcessUnseenEmails()
+    
+    if err != nil {
+        logrus.WithError(err).Error("❌ IMAP Worker berhenti karena error")
+    } else {
+        logrus.Info("✅ IMAP Worker berhasil dieksekusi")
+    }
 }
