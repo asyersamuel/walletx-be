@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"io"
 	"walletx-be/internal/services"
 
 	"github.com/emersion/go-imap"
@@ -13,11 +14,11 @@ type IMAPWorker struct {
 	Server    string
 	Email     string
 	Password  string
-	TxService *services.TransactionService
+	TxService services.TransactionService
 }
 
 // NewIMAPWorker creates a new IMAPWorker instance
-func NewIMAPWorker(email, password string, txService *services.TransactionService) *IMAPWorker {
+func NewIMAPWorker(email, password string, txService services.TransactionService) *IMAPWorker {
 	return &IMAPWorker{
 		Server:    "imap.gmail.com:993",
 		Email:     email,
@@ -77,31 +78,70 @@ func (p *IMAPWorker) ProcessUnseenEmails() error {
 	seqset := new(imap.SeqSet)
 	seqset.AddNum(ids...)
 
+	// Define the body section to fetch the actual email content
+	section := &imap.BodySectionName{}
+
+	// Add the body section to the items we want to fetch
+	items := []imap.FetchItem{imap.FetchEnvelope, section.FetchItem()}
+
 	// Channel to receive incoming messages
 	messages := make(chan *imap.Message, len(ids))
 	done := make(chan error, 1)
 
-	// Fetch envelopes asynchronously
+	// Fetch envelopes and bodies asynchronously
 	go func() {
-		done <- c.Fetch(seqset, []imap.FetchItem{imap.FetchEnvelope}, messages)
+		done <- c.Fetch(seqset, items, messages)
 	}()
 
 	// Iterate through fetched messages
 	for msg := range messages {
-		logEntry := logrus.WithFields(logrus.Fields{
-			"seq_num": msg.SeqNum,
-			"msg_id":  msg.Envelope.MessageId,
-			"subject": msg.Envelope.Subject,
-		})
-
-		if len(msg.Envelope.From) > 0 {
-			fromEmail := msg.Envelope.From[0].Address()
-			logEntry = logEntry.WithField("from", fromEmail)
+		if len(msg.Envelope.From) == 0 {
+			continue
 		}
 
-		logEntry.Info("📨 [IMAP] Successfully fetched email envelope")
+		fromEmail := msg.Envelope.From[0].Address()
+		messageID := msg.Envelope.MessageId
+		date := msg.Envelope.Date
 
-		// TODO: Implement database check for registered sender email here
+		logEntry := logrus.WithFields(logrus.Fields{
+			"seq_num": msg.SeqNum,
+			"msg_id":  messageID,
+			"subject": msg.Envelope.Subject,
+			"from":    fromEmail,
+		})
+
+		logEntry.Info("📨 [IMAP] Successfully fetched email envelope and body")
+
+		// Extract raw body text
+		var rawBody string
+		r := msg.GetBody(section)
+		if r != nil {
+			bodyBytes, err := io.ReadAll(r)
+			if err != nil {
+				logEntry.WithError(err).Warn("⚠️ [IMAP] Failed to read email body bytes")
+			} else {
+				rawBody = string(bodyBytes)
+			}
+		}
+
+		// Pass the real rawBody to the Transaction Service
+		err := p.TxService.ProcessTransactionEmail(fromEmail, messageID, rawBody, date)
+		if err != nil {
+			logEntry.WithError(err).Error("❌ [IMAP] Failed to process transaction in service")
+			continue 
+		}
+
+		// Mark email as SEEN only if processing was successful
+		markSet := new(imap.SeqSet)
+		markSet.AddNum(msg.SeqNum)
+		flagOp := imap.FormatFlagsOp(imap.AddFlags, true)
+		flags := []interface{}{imap.SeenFlag}
+
+		if err := c.Store(markSet, flagOp, flags, nil); err != nil {
+			logEntry.WithError(err).Warn("⚠️ [IMAP] Failed to mark email as SEEN")
+		} else {
+			logEntry.Info("✅ [IMAP] Email processed and marked as SEEN")
+		}
 	}
 
 	// Wait for fetch completion

@@ -1,26 +1,92 @@
 package services
 
 import (
+	"errors"
+	"time"
+
+	"walletx-be/internal/models"
+	"walletx-be/internal/repository"
+
 	"github.com/sirupsen/logrus"
+	"gorm.io/gorm"
 )
 
-// TransactionService menangani logika bisnis transaksi
-type TransactionService struct {
-	// Nanti di sini akan ada Repository (Database)
-}
-
-func NewTransactionService() *TransactionService {
-	return &TransactionService{}
-}
-
-// ProcessTransactionEmail adalah fungsi yang akan dipanggil oleh Worker
-func (s *TransactionService) ProcessTransactionEmail(rawBody string, emailOwner string) error {
-	logrus.WithFields(logrus.Fields{
-		"user": emailOwner,
-	}).Info("🧠 [Service] Memproses data transaksi dari email")
-
-	// 1. Nanti di sini panggil Parser (Regex) untuk ambil angka
-	// 2. Nanti di sini panggil Repository untuk cek idempotency & simpan
+// TransactionService defines the contract for transaction-related business logic
+type TransactionService interface {
+	// ProcessTransactionEmail is called by the IMAP worker to handle incoming emails
+	ProcessTransactionEmail(emailSender string, messageID string, rawBody string, date time.Time) error
 	
+	// Other methods can be added later (e.g., GetUserTransactions)
+}
+
+type transactionService struct {
+	userRepo        repository.UserRepository
+	transactionRepo repository.TransactionRepository
+	parserService   ParserService
+}
+
+// NewTransactionService is the constructor
+func NewTransactionService(userRepo repository.UserRepository, transactionRepo repository.TransactionRepository, parserService ParserService) TransactionService {
+	return &transactionService{
+		userRepo:        userRepo,
+		transactionRepo: transactionRepo,
+		parserService:   parserService,
+	}
+}
+
+// ProcessTransactionEmail handles the core logic of matching emails to users and saving transactions
+func (s *transactionService) ProcessTransactionEmail(emailSender string, messageID string, rawBody string, date time.Time) error {
+	logEntry := logrus.WithFields(logrus.Fields{
+		"sender":     emailSender,
+		"message_id": messageID,
+	})
+
+	// Check if the sender's email belongs to a registered user
+	user, err := s.userRepo.FindByEmail(emailSender)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			logEntry.Warn("⚠️ [Service] User not found for this email. Ignoring.")
+			return nil 
+		}
+		logEntry.WithError(err).Error("❌ [Service] Database error while finding user")
+		return err
+	}
+
+	logEntry.WithField("user_id", user.ID).Info("✅ [Service] User matched. Parsing email body...")
+
+
+    // DEBUG RAW BODY --> melihat bentuk dan struktur body untuk menyesuaikan parser
+    logrus.Info("\n========== RAW EMAIL BODY ==========\n", rawBody, "\n====================================\n")
+
+ 
+
+	parsedData, err := s.parserService.ParseTransactionEmail(rawBody)
+	if err != nil {
+		logEntry.WithError(err).Error("❌ [Service] Failed to parse email body. Transaction skipped.")
+		return err 
+	}
+
+	// Create the Transaction object
+	transaction := &models.Transaction{
+		UserID:          user.ID,
+		Amount:          parsedData.Amount,     
+		Merchant:        parsedData.Merchant,  
+		TransactionDate: date,
+		MessageID:       messageID, 
+	}
+
+	// Save to Database
+	err = s.transactionRepo.Create(transaction)
+	if err != nil {
+		// If the error is a duplicate key (meaning the email was already processed), can ignore it
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			logEntry.Warn("⚠️ [Service] Transaction already exists (Duplicate Message-ID). Ignoring.")
+			return nil
+		}
+		logEntry.WithError(err).Error("❌ [Service] Failed to save transaction")
+		return err
+	}
+
+	logEntry.Info("🎉 [Service] Transaction successfully saved to database!")
 	return nil
 }

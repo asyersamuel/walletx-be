@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"walletx-be/configs"
-	"walletx-be/internal/models"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -31,9 +30,18 @@ func Init(cfg configs.DatabaseConfig) (*gorm.DB, error) {
 	// Retry connection with exponential backoff
 	maxRetries := 30
 	for i := 0; i < maxRetries; i++ {
-		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
-			Logger: logger.Default.LogMode(logger.Info),
+		// db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
+		// 	// Logger: logger.Default.LogMode(logger.Info),
+		// 	Logger: logger.Default.LogMode(logger.Warn),
+		// })
+
+		db, err = gorm.Open(postgres.New(postgres.Config{
+			DSN:                  dsn,
+			PreferSimpleProtocol: true, // MATIKAN prepared statement untuk Supabase Pooler
+		}), &gorm.Config{
+			Logger: logger.Default.LogMode(logger.Warn),
 		})
+
 		if err == nil {
 			break
 		}
@@ -57,13 +65,13 @@ func Init(cfg configs.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Auto-migrate models
-	if err := db.AutoMigrate(
-		&models.User{},
-		&models.Transaction{},
-	); err != nil {
-		return nil, fmt.Errorf("failed to migrate database: %w", err)
-	}
+	// Auto-migrate models - Hanya saat pertama dijalankan/kalau belum Create Table di Supabase SQL Editor
+	// if err := db.AutoMigrate(
+	// 	&models.User{},
+	// 	&models.Transaction{},
+	// ); err != nil {
+	// 	return nil, fmt.Errorf("failed to migrate database: %w", err)
+	// }
 
 	return db, nil
 }

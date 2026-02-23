@@ -5,6 +5,9 @@ import (
 
 	"walletx-be/configs"
 	"walletx-be/internal/database"
+	"walletx-be/internal/repository" 
+	"walletx-be/internal/services"   
+	"walletx-be/internal/workers"
 
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
@@ -35,11 +38,27 @@ func main() {
 
 	logrus.Info("✅ Database connected and models migrated successfully")
 	
-	// Optional: verify connection using raw SQL ping
-	sqlDB, _ := db.DB()
-	if err := sqlDB.Ping(); err == nil {
-		logrus.Info("📡 Supabase ping successful")
-	}
+	// 2. Initialize Repositories (Injecting Database)
+	userRepo := repository.NewUserRepository(db)
+	transactionRepo := repository.NewTransactionRepository(db)
+	
+	// Inisialisasi Parser
+	parserService := services.NewParserService()
 
-	// TODO: Initialize services and IMAP worker here...
+	// 3. Initialize Services (Injecting Repositories)
+	txService := services.NewTransactionService(userRepo, transactionRepo, parserService)
+
+	// 4. Initialize and Run IMAP Worker (Injecting Service)
+	logrus.WithFields(logrus.Fields{
+		"bot_email": cfg.IMAP.Email,
+	}).Info("Starting IMAP Worker...")
+
+	worker := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
+	err = worker.ProcessUnseenEmails()
+	
+	if err != nil {
+		logrus.WithError(err).Error("❌ IMAP Worker stopped due to an error")
+	} else {
+		logrus.Info("✅ IMAP Worker executed successfully")
+	}
 }
