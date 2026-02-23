@@ -7,6 +7,7 @@ import (
 	"walletx-be/internal/models"
 	"walletx-be/internal/repository"
 
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
@@ -16,7 +17,7 @@ type TransactionService interface {
 	// ProcessTransactionEmail is called by the IMAP worker to handle incoming emails
 	ProcessTransactionEmail(emailSender string, messageID string, rawBody string, date time.Time) error
 	
-	// Other methods can be added later (e.g., GetUserTransactions)
+	GetUserTransactions(userID uuid.UUID, limit, offset int) ([]models.Transaction, error)
 }
 
 type transactionService struct {
@@ -89,4 +90,24 @@ func (s *transactionService) ProcessTransactionEmail(emailSender string, message
 
 	logEntry.Info("🎉 [Service] Transaction successfully saved to database!")
 	return nil
+}
+
+// GetUserTransactions user's list transaction
+func (s *transactionService) GetUserTransactions(userID uuid.UUID, limit, offset int) ([]models.Transaction, error) {
+	// Pagination
+	if limit <= 0 || limit > 100 {
+		limit = 20 
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Call Repository
+	transactions, err := s.transactionRepo.ListByUserID(userID, limit, offset)
+	if err != nil {
+		logrus.WithError(err).WithField("user_id", userID).Error("❌ [Service] Failed to get user transactions")
+		return nil, err
+	}
+
+	return transactions, nil
 }
