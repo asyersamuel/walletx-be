@@ -1,24 +1,26 @@
 package database
 
 import (
-	config "walletx-be/configs"
-	"walletx-be/internal/models"
 	"fmt"
 	"time"
+
+	"walletx-be/configs"
+	"walletx-be/internal/models"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
-func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
+// Init establishes a connection to the database and performs auto-migration
+func Init(cfg configs.DatabaseConfig) (*gorm.DB, error) {
 	var dsn string
 
-	// Penggunaan URL penuh (Supabase)
+	// Prioritize full connection URL (e.g., Supabase URI)
 	if cfg.URL != "" {
 		dsn = cfg.URL
 	} else {
-		// Fallback ke rakit manual jika URL kosong
+		// Fallback to manual connection string construction
 		dsn = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=Asia/Jakarta",
 			cfg.Host, cfg.User, cfg.Password, cfg.DBName, cfg.Port, cfg.SSLMode)
 	}
@@ -45,7 +47,7 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		time.Sleep(waitTime)
 	}
 
-	// Test the connection
+	// Verify the connection
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get database instance: %w", err)
@@ -55,15 +57,10 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Auto migrate models
+	// Auto-migrate models
 	if err := db.AutoMigrate(
 		&models.User{},
-		&models.Swipe{},
-		&models.Match{},
-		&models.Conversation{},
-		&models.Message{},
-		&models.Status{},
-		&models.StatusLike{},
+		&models.Transaction{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %w", err)
 	}

@@ -2,92 +2,92 @@ package workers
 
 import (
 	"walletx-be/internal/services"
+
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	"github.com/sirupsen/logrus"
 )
 
-// IMAPWorker bertanggung jawab memproses email masuk
+// IMAPWorker handles processing of incoming emails
 type IMAPWorker struct {
-	Server   string
-	Email    string
-	Password string
+	Server    string
+	Email     string
+	Password  string
 	TxService *services.TransactionService
 }
 
-// NewIMAPWorker membuat instance IMAPWorker Baru
+// NewIMAPWorker creates a new IMAPWorker instance
 func NewIMAPWorker(email, password string, txService *services.TransactionService) *IMAPWorker {
 	return &IMAPWorker{
-		Server:   "imap.gmail.com:993",
-		Email:    email,
-		Password: password,
+		Server:    "imap.gmail.com:993",
+		Email:     email,
+		Password:  password,
 		TxService: txService,
 	}
 }
 
-// ProcessUnseenEmails melakukan Koneksi, Membaca, dan Mengubah Status
+// ProcessUnseenEmails connects to the IMAP server, fetches unread emails, and triggers processing
 func (p *IMAPWorker) ProcessUnseenEmails() error {
-	logrus.Info("⏳ [IMAP] Mencoba terhubung ke server...")
+	logrus.Info("⏳ [IMAP] Attempting to connect to server...")
 
-	// 1. Konek ke Server
+	// Connect to IMAP server
 	c, err := client.DialTLS(p.Server, nil)
 	if err != nil {
-		logrus.WithError(err).Error("❌ [IMAP] Gagal terhubung")
+		logrus.WithError(err).Error("❌ [IMAP] Connection failed")
 		return err
 	}
 	defer c.Logout()
 
-	logrus.WithField("server", p.Server).Info("✅ [IMAP] Berhasil terhubung")
+	logrus.WithField("server", p.Server).Info("✅ [IMAP] Connected successfully")
 
-	// 2. Autentikasi
+	// Authenticate
 	if err := c.Login(p.Email, p.Password); err != nil {
-		logrus.WithError(err).Error("❌ [IMAP] Gagal login")
+		logrus.WithError(err).Error("❌ [IMAP] Authentication failed")
 		return err
 	}
-	logrus.Info("✅ [IMAP] Berhasil Login!")
+	logrus.Info("✅ [IMAP] Login successful")
 
-	// 3. Pilih Kotak Masuk
+	// Select INBOX
 	mbox, err := c.Select("INBOX", false)
 	if err != nil {
-		logrus.WithError(err).Error("❌ [IMAP] Gagal membuka INBOX")
+		logrus.WithError(err).Error("❌ [IMAP] Failed to select INBOX")
 		return err
 	}
 
-	logrus.WithField("total_messages", mbox.Messages).Info("📥 [IMAP] Status INBOX")
+	logrus.WithField("total_messages", mbox.Messages).Info("📥 [IMAP] INBOX status")
 
-	// 4. Cari Email UNSEEN
+	// Search for UNSEEN emails
 	criteria := imap.NewSearchCriteria()
 	criteria.WithoutFlags = []string{imap.SeenFlag}
 
 	ids, err := c.Search(criteria)
 	if err != nil {
-		logrus.WithError(err).Error("❌ [IMAP] Gagal mencari email UNSEEN")
+		logrus.WithError(err).Error("❌ [IMAP] Failed to search for UNSEEN emails")
 		return err
 	}
 
 	if len(ids) == 0 {
-		logrus.Info("📭 [IMAP] Tidak ada email baru untuk diproses.")
+		logrus.Info("📭 [IMAP] No new emails to process")
 		return nil
 	}
 
-	logrus.WithField("unseen_count", len(ids)).Info("📫 [IMAP] Ditemukan email baru. Memulai ekstraksi...")
+	logrus.WithField("unseen_count", len(ids)).Info("📫 [IMAP] Found new emails, starting extraction...")
 
-	// 5. Persiapkan pengambilan data (Fetch)
+	// Prepare to fetch data
 	seqset := new(imap.SeqSet)
 	seqset.AddNum(ids...)
 
-	// Channel untuk menampung pesan yang datang dari server
+	// Channel to receive incoming messages
 	messages := make(chan *imap.Message, len(ids))
 	done := make(chan error, 1)
 
-	// Mulai mengambil Envelope secara asynchronous
+	// Fetch envelopes asynchronously
 	go func() {
 		done <- c.Fetch(seqset, []imap.FetchItem{imap.FetchEnvelope}, messages)
 	}()
 
-	// 6. Iterasi setiap email yang masuk ke channel
+	// Iterate through fetched messages
 	for msg := range messages {
-		// Gunakan Logrus dengan Fields agar terstruktur
 		logEntry := logrus.WithFields(logrus.Fields{
 			"seq_num": msg.SeqNum,
 			"msg_id":  msg.Envelope.MessageId,
@@ -99,16 +99,14 @@ func (p *IMAPWorker) ProcessUnseenEmails() error {
 			logEntry = logEntry.WithField("from", fromEmail)
 		}
 
-		logEntry.Info("📨 [IMAP] Berhasil mengambil envelope email")
+		logEntry.Info("📨 [IMAP] Successfully fetched email envelope")
 
-		// LOGIKA BERIKUTNYA:
-		// Di sini nanti kita akan cek ke Database: 
-		// "Apakah email pengirim ini terdaftar?"
+		// TODO: Implement database check for registered sender email here
 	}
 
-	// Tunggu sampai semua fetch selesai
+	// Wait for fetch completion
 	if err := <-done; err != nil {
-		logrus.WithError(err).Error("❌ [IMAP] Error saat fetch envelope")
+		logrus.WithError(err).Error("❌ [IMAP] Error during envelope fetch")
 		return err
 	}
 

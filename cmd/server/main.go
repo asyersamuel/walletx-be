@@ -3,40 +3,43 @@ package main
 import (
 	"os"
 
-	"walletx-be/internal/workers"
+	"walletx-be/configs"
+	"walletx-be/internal/database"
+
+	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
 )
 
-
 func init() {
-	// Standarisasi Logrus Global
+	// Standardize global logging format
 	logrus.SetFormatter(&logrus.JSONFormatter{})
 	logrus.SetOutput(os.Stdout)
 	logrus.SetLevel(logrus.InfoLevel)
 }
 
 func main() {
-    logrus.Info("🚀 Memulai Aplikasi WalletX...")
+	if err := godotenv.Load(); err != nil {
+		logrus.Warn("⚠️ File .env tidak ditemukan, menggunakan variabel sistem default")
+	}
+	
+	// Load application configuration
+	cfg := configs.Load()
 
-    // 1. Load Configuration
-    cfg := config.Load()
+	// Initialize database connection
+	logrus.Info("🚀 Initializing database connection...")
+	db, err := database.Init(cfg.Database)
+	
+	if err != nil {
+		logrus.WithError(err).Fatal("❌ Failed to connect to database")
+	}
 
-    // 2. Inisialisasi Service
-    txService := services.NewTransactionService()
+	logrus.Info("✅ Database connected and models migrated successfully")
+	
+	// Optional: verify connection using raw SQL ping
+	sqlDB, _ := db.DB()
+	if err := sqlDB.Ping(); err == nil {
+		logrus.Info("📡 Supabase ping successful")
+	}
 
-    // 3. Menjalankan Worker menggunakan data dari Config
-    logrus.WithFields(logrus.Fields{
-        "bot_email": cfg.IMAP.Email,
-    }).Info("Menginisialisasi IMAP Worker")
-
-    // Ambil kredensial langsung dari object cfg
-    worker := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
-    
-    err := worker.ProcessUnseenEmails()
-    
-    if err != nil {
-        logrus.WithError(err).Error("❌ IMAP Worker berhenti karena error")
-    } else {
-        logrus.Info("✅ IMAP Worker berhasil dieksekusi")
-    }
+	// TODO: Initialize services and IMAP worker here...
 }
