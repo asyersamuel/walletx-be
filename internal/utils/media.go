@@ -1,7 +1,7 @@
 package utils
 
 import (
-	config "backend-service/configs"
+	config "walletx-be/configs"
 	"fmt"
 	"mime/multipart"
 	"path/filepath"
