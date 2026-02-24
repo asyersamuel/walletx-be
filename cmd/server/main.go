@@ -52,18 +52,25 @@ func main() {
 	// Initialize Handler
 	txHandler := handlers.NewTransactionHandler(txService)
 
-	// Goroutine IMAP Worker
-	go func() {
-		logrus.WithField("bot_email", cfg.IMAP.Email).Info("Starting IMAP Worker in background...")
+	// Initialize IMAP Worker
+	imapWorker := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
 
-		worker := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
-		err := worker.ProcessUnseenEmails()
-		if err != nil {
-			logrus.WithError(err).Error("❌ IMAP Worker stopped due to an error")
-		} else {
-			logrus.Info("✅ IMAP Worker executed successfully")
-		}
-	}()
+	// Setup Cron
+	cronScheduler := workers.SetupCronJobs(imapWorker)
+
+	// Start the cron scheduler in a non-blocking way
+	cronScheduler.Start()
+	logrus.Info("🛡️ [System] Background scheduler started successfully")
+
+	// Pastikan cron dimatikan saat aplikasi berhenti (Graceful Shutdown)
+    defer func() {
+        logrus.Info("🛑 [System] Stopping background scheduler...")
+        cronScheduler.Stop()
+    }()
+
+	// Development - worker test
+	logrus.Info("🛠️ [Dev Mode] Menjalankan IMAP Worker satu kali saat startup...")
+	_ = imapWorker.ProcessUnseenEmails()
 
 	// Setup and Run Router Gin
 	logrus.Info("Starting REST API Server...")
@@ -77,7 +84,7 @@ func main() {
 	logrus.WithFields(logrus.Fields{
 		"port": port,
 		"env":  os.Getenv("GIN_MODE"),
-		"url":  "http://localhost" + port,
+		"url":  "http://localhost:" + port,
 	}).Info("🚀 WalletX REST API Server is starting to listen")
 
 	if err := r.Run(":" + port); err != nil {
