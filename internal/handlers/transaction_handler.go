@@ -1,20 +1,55 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
+	"strconv"
 
+	"walletx-be/internal/services"
+	"walletx-be/internal/utils" 
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 )
 
-func GetWalletStatus(w http.ResponseWriter, r *http.Request) {
-	logrus.Info("Memulai pengecekan saldo wallet di database")
+type TransactionHandler struct {
+	txService services.TransactionService
+}
 
-	response := map[string]string{
-		"status":  "success",
-		"message": "WalletX API is Running!",
+func NewTransactionHandler(txService services.TransactionService) *TransactionHandler {
+	return &TransactionHandler{
+		txService: txService,
+	}
+}
+
+// GetUserTransactions handle request GET /transaction
+func (h *TransactionHandler) GetUserTransactions(c *gin.Context){
+	userIDVal, exists := c.Get("user_id")
+	if !exists {
+		utils.UnauthorizedResponse(c, "User not authenticated")
+		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	// Parese user_id string to uuid
+	userIDStr := userIDVal.(string)
+	userUUID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		logrus.WithError(err).Warn("Invalid UUID format from token")
+		utils.FailResponseWithStatus(c, http.StatusBadRequest, "Invalid user ID format")
+		return
+	}
+
+
+	// Pagination parameter from URL Query
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+	// Call Service
+	transactions, err := h.txService.GetUserTransactions(userUUID, limit, offset)
+	if err != nil {
+		utils.ErrorResponse(c, "Failed to retrieve transactions")
+		return
+	}
+
+	utils.SuccessResponse(c, transactions, "Transactions retrieved successfully")
 }

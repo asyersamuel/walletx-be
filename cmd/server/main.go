@@ -8,6 +8,9 @@ import (
 	"walletx-be/internal/repository" 
 	"walletx-be/internal/services"   
 	"walletx-be/internal/workers"
+	"walletx-be/internal/handlers"
+	"walletx-be/internal/router"
+
 
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
@@ -38,27 +41,47 @@ func main() {
 
 	logrus.Info("✅ Database connected and models migrated successfully")
 	
-	// 2. Initialize Repositories (Injecting Database)
+	// Initialize Repositories (Injecting Database)
 	userRepo := repository.NewUserRepository(db)
 	transactionRepo := repository.NewTransactionRepository(db)
 	
-	// Inisialisasi Parser
+	// Initialize Service
 	parserService := services.NewParserService()
+	txService := services.NewTransactionService(userRepo,transactionRepo, parserService)
 
-	// 3. Initialize Services (Injecting Repositories)
-	txService := services.NewTransactionService(userRepo, transactionRepo, parserService)
+	// Initialize Handler
+	txHandler := handlers.NewTransactionHandler(txService)
 
-	// 4. Initialize and Run IMAP Worker (Injecting Service)
-	logrus.WithFields(logrus.Fields{
-		"bot_email": cfg.IMAP.Email,
-	}).Info("Starting IMAP Worker...")
+	// Goroutine IMAP Worker
+	go func() {
+		logrus.WithField("bot_email", cfg.IMAP.Email).Info("Starting IMAP Worker in background...")
 
-	worker := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
-	err = worker.ProcessUnseenEmails()
+		worker := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
+		err := worker.ProcessUnseenEmails()
+		if err != nil {
+			logrus.WithError(err).Error("❌ IMAP Worker stopped due to an error")
+		} else {
+			logrus.Info("✅ IMAP Worker executed successfully")
+		}
+	}()
+
+	// Setup and Run Router Gin
+	logrus.Info("Starting REST API Server...")
+	r := router.SetupRouter(txHandler, cfg.JWT.Secret, cfg)
 	
-	if err != nil {
-		logrus.WithError(err).Error("❌ IMAP Worker stopped due to an error")
-	} else {
-		logrus.Info("✅ IMAP Worker executed successfully")
+	port := cfg.Server.Port
+	if port == "" {
+		port = "8080"
 	}
+	
+	logrus.WithFields(logrus.Fields{
+		"port": port,
+		"env":  os.Getenv("GIN_MODE"),
+		"url":  "http://localhost" + port,
+	}).Info("🚀 WalletX REST API Server is starting to listen")
+
+	if err := r.Run(":" + port); err != nil {
+		logrus.WithError(err).Fatal("❌ Failed to start server")
+	}
+
 }
