@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"walletx-be/internal/models"
 
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ type UserRepository interface {
 	Create(user *models.User) error
 	GetByID(id uuid.UUID) (*models.User, error)
 	FindByEmail(email string) (*models.User, error)
+	FindByGoogleID(googleID string) (*models.User, error)
 	Update(user *models.User) error
 }
 
@@ -47,4 +49,16 @@ func (r *userRepository) FindByEmail(email string) (*models.User, error) {
 
 func (r *userRepository) Update(user *models.User) error {
 	return r.db.Save(user).Error
+}
+
+func (r *userRepository) FindByGoogleID(googleID string) (*models.User, error) {
+	var user models.User
+	err := r.db.Where("google_id = ?", googleID).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil // User belum ada
+		}
+		return nil, err // Ada error database beneran
+	}
+	return &user, nil
 }
