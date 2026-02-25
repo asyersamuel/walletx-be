@@ -7,7 +7,9 @@ import (
 	"walletx-be/internal/database"
 	"walletx-be/internal/handlers"
 	"walletx-be/internal/repository"
+	"walletx-be/internal/router"
 	"walletx-be/internal/services"
+	"walletx-be/internal/workers"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -26,32 +28,57 @@ func main() {
 		logrus.Warn("⚠️ File .env tidak ditemukan, menggunakan variabel sistem default")
 	}
 
-	// 1. Load application configuration & Database
+	// 1. Load application configuration
 	cfg := configs.Load()
+
+	// 2. Initialize database connection
 	logrus.Info("🚀 Initializing database connection...")
-	
 	db, err := database.Init(cfg.Database)
+
 	if err != nil {
 		logrus.WithError(err).Fatal("❌ Failed to connect to database")
 	}
-	logrus.Info("✅ Database connected successfully")
+	logrus.Info("✅ Database connected and models migrated successfully")
 
-	// 2. Initialize Repositories (Fokus ke User Repo saja)
+	// 3. Initialize Repositories
 	userRepo := repository.NewUserRepository(db)
+	transactionRepo := repository.NewTransactionRepository(db)
 
-	// 3. Initialize Services (Fokus ke Auth Service)
+	// 4. Initialize Services
 	authService := services.NewAuthService(userRepo)
+	parserService := services.NewParserService()
+	txService := services.NewTransactionService(userRepo, transactionRepo, parserService)
 
-	// 4. Initialize Handlers
+	// 5. Initialize Handlers
 	authHandler := handlers.NewAuthHandler(authService)
+	txHandler := handlers.NewTransactionHandler(txService)
 
-	// ==========================================
-	// 5. SETUP GIN ROUTER & JALANKAN API SERVER
-	// ==========================================
-	router := gin.Default()
+	// 6. Initialize IMAP Worker & Cron (Dari branch transaction)
+	imapWorker := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
+	cronScheduler := workers.SetupCronJobs(imapWorker)
 
-	// Setup API Routes
-	api := router.Group("/api/v1")
+	// Start the cron scheduler in a non-blocking way
+	cronScheduler.Start()
+	logrus.Info("🛡️ [System] Background scheduler started successfully")
+
+	// Pastikan cron dimatikan saat aplikasi berhenti (Graceful Shutdown)
+	defer func() {
+		logrus.Info("🛑 [System] Stopping background scheduler...")
+		cronScheduler.Stop()
+	}()
+
+	// Development - worker test
+	logrus.Info("🛠️ [Dev Mode] Menjalankan IMAP Worker satu kali saat startup...")
+	_ = imapWorker.ProcessUnseenEmails()
+
+	// 7. Setup Router Gin
+	logrus.Info("🌐 Starting REST API Server...")
+	
+	// Menggunakan base router dari branch transaction
+	r := router.SetupRouter(txHandler, cfg.JWT.Secret, cfg)
+
+	// Menambahkan route dari branch registration (milikmu) ke router 'r'
+	api := r.Group("/api/v1")
 	{
 		// Cek status server
 		api.GET("/ping", func(c *gin.Context) {
@@ -61,17 +88,23 @@ func main() {
 		// Rute untuk Testing Registrasi / Login OAuth2
 		auth := api.Group("/auth")
 		{
-			auth.POST("/google", authHandler.HandleGoogleAuth) 
+			auth.POST("/google", authHandler.HandleGoogleAuth)
 		}
 	}
 
-	port := os.Getenv("PORT")
+	// 8. Jalankan Server
+	port := cfg.Server.Port
 	if port == "" {
 		port = "8080"
 	}
 
-	logrus.Infof("🌐 Menjalankan REST API Server di port %s...", port)
-	if err := router.Run(":" + port); err != nil {
-		logrus.WithError(err).Fatal("❌ Gagal menjalankan server HTTP")
+	logrus.WithFields(logrus.Fields{
+		"port": port,
+		"env":  os.Getenv("GIN_MODE"),
+		"url":  "http://localhost:" + port,
+	}).Info("🚀 WalletX REST API Server is starting to listen")
+
+	if err := r.Run(":" + port); err != nil {
+		logrus.WithError(err).Fatal("❌ Failed to start server")
 	}
 }

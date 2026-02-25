@@ -1,11 +1,11 @@
 package utils
 
 import (
+	config "walletx-be/configs"
 	"fmt"
 	"mime/multipart"
 	"path/filepath"
 	"strings"
-	config "walletx-be/configs"
 )
 
 // MediaConfig holds configuration for media uploads
