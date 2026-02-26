@@ -1,55 +1,56 @@
 package router
 
 import (
+	"time"
+
 	config "walletx-be/configs"
 	"walletx-be/internal/handlers"
 	"walletx-be/internal/middleware"
-	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
 func SetupRouter(
-	txHandler *handlers.TransactionHandler, 
-	jwtSecret string, 
+	txHandler *handlers.TransactionHandler,
+	authHandler *handlers.AuthHandler, // Menambahkan AuthHandler ke parameter
+	jwtSecret string,
 	cfg *config.Config,
 ) *gin.Engine {
 	r := gin.Default()
 
 	// CORS Configuration
 	r.Use(cors.New(cors.Config{
-		// Izinkan semua origin (termasuk ngrok, localhost, dll)
-		AllowAllOrigins: true,
-
-		// Method yang diizinkan
-		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
-
-		// Header yang diizinkan (tambahkan jika ada custom header dari frontend)
-		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"},
-
-		// Ekspos header tertentu ke frontend
-		ExposeHeaders: []string{"Content-Length"},
-
-		// Izinkan kredensial (cookies/auth headers)
+		AllowAllOrigins:  true,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"},
+		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
-
-		// Cache preflight request selama 12 jam
-		MaxAge: 12 * time.Hour,
+		MaxAge:           12 * time.Hour,
 	}))
 
-	// Serve static files only for local storage (Supabase serves files via CDN)
+	// Serve static files only for local storage
 	if cfg.Media.StorageType == "local" {
 		r.Static(cfg.Media.BaseURL, cfg.Media.UploadDir)
 	}
 
-
+	// Setup API Routes
 	api := r.Group("/api/v1")
 	{
+		// Cek status server
+		api.GET("/ping", func(c *gin.Context) {
+			c.JSON(200, gin.H{"message": "WalletX API is running!"})
+		})
 
-		// Route Transaction
+		// Route Auth / Registrasi
+		auth := api.Group("/auth")
+		{
+			auth.POST("/google", authHandler.HandleGoogleAuth)
+		}
+
+		// Route Transaction (Dilindungi Middleware)
 		transactions := api.Group("/transactions")
-		transactions.Use(middleware.AuthMiddleware(jwtSecret)) 
+		transactions.Use(middleware.AuthMiddleware(jwtSecret))
 		{
 			// Endpoint: GET /api/v1/transactions?limit=20&offset=0
 			transactions.GET("", txHandler.GetUserTransactions)

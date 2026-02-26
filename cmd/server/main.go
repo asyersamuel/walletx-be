@@ -11,7 +11,6 @@ import (
 	"walletx-be/internal/services"
 	"walletx-be/internal/workers"
 
-	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
 )
@@ -73,24 +72,9 @@ func main() {
 
 	// 7. Setup Router Gin
 	logrus.Info("🌐 Starting REST API Server...")
-	
+
 	// Menggunakan base router dari branch transaction
-	r := router.SetupRouter(txHandler, cfg.JWT.Secret, cfg)
-
-	// Menambahkan route dari branch registration (milikmu) ke router 'r'
-	api := r.Group("/api/v1")
-	{
-		// Cek status server
-		api.GET("/ping", func(c *gin.Context) {
-			c.JSON(200, gin.H{"message": "WalletX API is running!"})
-		})
-
-		// Rute untuk Testing Registrasi / Login OAuth2
-		auth := api.Group("/auth")
-		{
-			auth.POST("/google", authHandler.HandleGoogleAuth)
-		}
-	}
+	r := router.SetupRouter(txHandler, authHandler, cfg.JWT.Secret, cfg)
 
 	// 8. Jalankan Server
 	port := cfg.Server.Port
