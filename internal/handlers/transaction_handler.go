@@ -23,33 +23,31 @@ func NewTransactionHandler(txService services.TransactionService) *TransactionHa
 }
 
 // GetUserTransactions handle request GET /transaction
-func (h *TransactionHandler) GetUserTransactions(c *gin.Context){
-	userIDVal, exists := c.Get("user_id")
-	if !exists {
-		utils.UnauthorizedResponse(c, "User not authenticated")
-		return
-	}
+func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
+    userIDVal, exists := c.Get("user_id")
+    if !exists {
+        utils.UnauthorizedResponse(c, "User not authenticated")
+        return
+    }
 
-	// Parese user_id string to uuid
-	userIDStr := userIDVal.(string)
-	userUUID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		logrus.WithError(err).Warn("Invalid UUID format from token")
-		utils.FailResponseWithStatus(c, http.StatusBadRequest, "Invalid user ID format")
-		return
-	}
+    userIDStr := userIDVal.(string)
+    userUUID, err := uuid.Parse(userIDStr)
+    if err != nil {
+        logrus.WithError(err).Warn("Invalid UUID format from token")
+        utils.FailResponseWithStatus(c, http.StatusBadRequest, "Invalid user ID format")
+        return
+    }
 
+    // Ambil parameter pagination
+    limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+    offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
-	// Pagination parameter from URL Query
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+    // Kirim userUUID (tipe uuid.UUID) ke service
+    transactions, err := h.txService.GetUserTransactions(userUUID, limit, offset)
+    if err != nil {
+        utils.ErrorResponse(c, "Failed to retrieve transactions")
+        return
+    }
 
-	// Call Service
-	transactions, err := h.txService.GetUserTransactions(userUUID, limit, offset)
-	if err != nil {
-		utils.ErrorResponse(c, "Failed to retrieve transactions")
-		return
-	}
-
-	utils.SuccessResponse(c, transactions, "Transactions retrieved successfully")
+    utils.SuccessResponse(c, transactions, "Transactions retrieved successfully")
 }

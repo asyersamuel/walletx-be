@@ -44,12 +44,12 @@ func main() {
 	transactionRepo := repository.NewTransactionRepository(db)
 
 	// 4. Initialize Services
-	authService := services.NewAuthService(userRepo)
+	authService := services.NewAuthService(userRepo, cfg)
 	parserService := services.NewParserService()
 	txService := services.NewTransactionService(userRepo, transactionRepo, parserService)
 
 	// 5. Initialize Handlers
-	authHandler := handlers.NewAuthHandler(authService)
+	authHandler := handlers.NewAuthHandler(authService, cfg)
 	txHandler := handlers.NewTransactionHandler(txService)
 
 	// 6. Initialize IMAP Worker & Cron (Dari branch transaction)

@@ -1,45 +1,69 @@
 package services
 
 import (
+	"context"
+	"fmt"
+	"time"
+
+	"walletx-be/configs"
 	"walletx-be/internal/models"
 	"walletx-be/internal/repository"
+
+	"github.com/golang-jwt/jwt/v5"
+	"google.golang.org/api/idtoken"
 )
 
-// DTO (Data Transfer Object) untuk menerima input dari Handler
+// DTO hanya menerima ID Token dari Frontend
 type GoogleAuthInput struct {
-	GoogleID string `json:"google_id" binding:"required"`
-	Email    string `json:"email" binding:"required,email"`
-	Name     string `json:"name" binding:"required"`
-	Picture  string `json:"picture"`
+	IDToken string `json:"id_token" binding:"required"`
 }
 
 type AuthService struct {
 	userRepo repository.UserRepository
+	cfg      *configs.Config
 }
 
-func NewAuthService(userRepo repository.UserRepository) *AuthService {
-	return &AuthService{userRepo: userRepo}
+func NewAuthService(userRepo repository.UserRepository, cfg *configs.Config) *AuthService {
+	return &AuthService{
+		userRepo: userRepo,
+		cfg:      cfg,
+	}
 }
 
-// ProcessGoogleAuth menangani logic Register/Login
 func (s *AuthService) ProcessGoogleAuth(input GoogleAuthInput) (*models.User, bool, error) {
-	// 1. Cek apakah user sudah ada
-	existingUser, err := s.userRepo.FindByGoogleID(input.GoogleID)
+	// Validate idToken to Google Server
+	payload, err := idtoken.Validate(context.Background(), input.IDToken, s.cfg.OAuth.ClientID)
+	if err != nil {
+		return nil, false, fmt.Errorf("invalid google id_token: %v", err)
+	}
+
+	// Extract Data from Google
+	googleID := payload.Subject
+	email := fmt.Sprintf("%v", payload.Claims["email"])
+	name := fmt.Sprintf("%v", payload.Claims["name"])
+	picture := ""
+	if payload.Claims["picture"] != nil {
+		picture = fmt.Sprintf("%v", payload.Claims["picture"])
+	}
+
+	// Check if user exist on database
+	existingUser, err := s.userRepo.FindByGoogleID(googleID)
 	if err != nil {
 		return nil, false, err
 	}
 
-	// 2. Jika SUDAH ADA, kembalikan data user tersebut (Status = Login)
 	if existingUser != nil {
-		return existingUser, false, nil // false berarti "bukan user baru"
+		existingUser.Name = name
+		existingUser.Picture = picture
+		s.userRepo.Update(existingUser)
+		return existingUser, false, nil
 	}
 
-	// 3. Jika BELUM ADA, buat objek User baru (Status = Register)
 	newUser := &models.User{
-		GoogleID: input.GoogleID,
-		Email:    input.Email,
-		Name:     input.Name,
-		Picture:  input.Picture,
+		GoogleID: googleID,
+		Email:    email,
+		Name:     name,
+		Picture:  picture,
 	}
 
 	err = s.userRepo.Create(newUser)
@@ -47,5 +71,18 @@ func (s *AuthService) ProcessGoogleAuth(input GoogleAuthInput) (*models.User, bo
 		return nil, false, err
 	}
 
-	return newUser, true, nil // true berarti "berhasil register akun baru"
+	return newUser, true, nil
+}
+
+func (s *AuthService) GenerateJWT(user *models.User) (string, error) {
+	claims := jwt.MapClaims{
+		"user_id": user.ID.String(),
+		"email":   user.Email,
+		"exp":     time.Now().Add(time.Hour * time.Duration(s.cfg.JWT.Expiration)).Unix(),
+		"iat":     time.Now().Unix(),
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	// Pastikan baris return ini berada di luar blok mana pun
+	return token.SignedString([]byte(s.cfg.JWT.Secret))
 }
