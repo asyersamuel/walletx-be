@@ -33,28 +33,40 @@ func main() {
 	// 2. Initialize database connection
 	logrus.Info("🚀 Initializing database connection...")
 	db, err := database.Init(cfg.Database)
-
 	if err != nil {
 		logrus.WithError(err).Fatal("❌ Failed to connect to database")
 	}
 	logrus.Info("✅ Database connected and models migrated successfully")
 
 	// 3. Initialize Repositories
-	userRepo := repository.NewUserRepository(db)
+	userRepo        := repository.NewUserRepository(db)
 	transactionRepo := repository.NewTransactionRepository(db)
+	categoryRepo    := repository.NewCategoryRepository(db)
+	budgetRepo      := repository.NewBudgetRepository(db)
+	recurringRepo   := repository.NewRecurringRepository(db)
+	summaryRepo     := repository.NewSummaryRepository(db)
 
 	// 4. Initialize Services
-	authService := services.NewAuthService(userRepo, cfg)
-	parserService := services.NewParserService()
-	txService := services.NewTransactionService(userRepo, transactionRepo, parserService)
+	authService      := services.NewAuthService(userRepo, cfg)
+	parserService    := services.NewParserService()
+	txService        := services.NewTransactionService(userRepo, transactionRepo, parserService)
+	categoryService  := services.NewCategoryService(categoryRepo)
+	budgetService    := services.NewBudgetService(budgetRepo)
+	recurringService := services.NewRecurringService(recurringRepo)
+	dashboardService := services.NewDashboardService(budgetRepo, summaryRepo)
 
 	// 5. Initialize Handlers
-	authHandler := handlers.NewAuthHandler(authService, cfg)
-	txHandler := handlers.NewTransactionHandler(txService)
+	authHandler      := handlers.NewAuthHandler(authService, cfg)
+	txHandler        := handlers.NewTransactionHandler(txService)
+	categoryHandler  := handlers.NewCategoryHandler(categoryService)
+	budgetHandler    := handlers.NewBudgetHandler(budgetService)
+	recurringHandler := handlers.NewRecurringHandler(recurringService)
+	dashboardHandler := handlers.NewDashboardHandler(dashboardService)
 
-	// 6. Initialize IMAP Worker & Cron (Dari branch transaction)
-	imapWorker := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
-	cronScheduler := workers.SetupCronJobs(imapWorker)
+	// 6. Initialize Workers & Cron
+	imapWorker      := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
+	recurringWorker := workers.NewRecurringWorker(recurringRepo, transactionRepo)
+	cronScheduler   := workers.SetupCronJobs(imapWorker, recurringWorker)
 
 	// Start the cron scheduler in a non-blocking way
 	cronScheduler.Start()
@@ -66,17 +78,24 @@ func main() {
 		cronScheduler.Stop()
 	}()
 
-	// Development - worker test
+	// Development - run IMAP worker once at startup for testing
 	logrus.Info("🛠️ [Dev Mode] Menjalankan IMAP Worker satu kali saat startup...")
 	_ = imapWorker.ProcessUnseenEmails()
 
 	// 7. Setup Router Gin
 	logrus.Info("🌐 Starting REST API Server...")
+	r := router.SetupRouter(
+		txHandler,
+		authHandler,
+		categoryHandler,
+		budgetHandler,
+		recurringHandler,
+		dashboardHandler,
+		cfg.JWT.Secret,
+		cfg,
+	)
 
-	// Menggunakan base router dari branch transaction
-	r := router.SetupRouter(txHandler, authHandler, cfg.JWT.Secret, cfg)
-
-	// 8. Jalankan Server
+	// 8. Run Server
 	port := cfg.Server.Port
 	if port == "" {
 		port = "8080"
@@ -92,3 +111,4 @@ func main() {
 		logrus.WithError(err).Fatal("❌ Failed to start server")
 	}
 }
+

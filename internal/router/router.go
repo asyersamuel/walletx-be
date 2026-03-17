@@ -12,10 +12,14 @@ import (
 )
 
 func SetupRouter(
-	txHandler *handlers.TransactionHandler,
-	authHandler *handlers.AuthHandler, // Menambahkan AuthHandler ke parameter
-	jwtSecret string,
-	cfg *config.Config,
+	txHandler         *handlers.TransactionHandler,
+	authHandler       *handlers.AuthHandler,
+	categoryHandler   *handlers.CategoryHandler,
+	budgetHandler     *handlers.BudgetHandler,
+	recurringHandler  *handlers.RecurringHandler,
+	dashboardHandler  *handlers.DashboardHandler,
+	jwtSecret         string,
+	cfg               *config.Config,
 ) *gin.Engine {
 	r := gin.Default()
 
@@ -37,33 +41,70 @@ func SetupRouter(
 	// Setup API Routes
 	api := r.Group("/api/v1")
 	{
-		// Cek status server
+		// Health check
 		api.GET("/ping", func(c *gin.Context) {
 			c.JSON(200, gin.H{"message": "WalletX API is running!"})
 		})
 
-
-		// Route Auth
+		// ── Auth Routes (public) ─────────────────────────────────────────────
 		auth := api.Group("/auth")
 		{
-			// Endpoint Utama untuk Aplikasi Mobile (Production)
 			auth.POST("/google", authHandler.HandleGoogleAuth)
 
-			// Endpoint Testing Khusus Development (Akses via Browser Komputer)
 			if cfg.App.DevMode {
 				auth.GET("/google/test-login", authHandler.GoogleLoginTest)
 				auth.GET("/google/callback", authHandler.GoogleCallbackTest)
 			}
 		}
 
-		// Route Transaction (Dilindungi Middleware)
-		transactions := api.Group("/transactions")
-		transactions.Use(middleware.AuthMiddleware(jwtSecret))
+		// ── Protected Routes (require valid JWT) ─────────────────────────────
+		protected := api.Group("")
+		protected.Use(middleware.AuthMiddleware(jwtSecret))
 		{
-			// Endpoint: GET /api/v1/transactions?limit=20&offset=0
-			transactions.GET("", txHandler.GetUserTransactions)
+			// Transactions
+			txGroup := protected.Group("/transactions")
+			{
+				txGroup.GET("", txHandler.GetUserTransactions)
+				txGroup.POST("", txHandler.CreateTransaction)
+			}
+
+			// Categories
+			catGroup := protected.Group("/categories")
+			{
+				catGroup.GET("", categoryHandler.ListCategories)
+				catGroup.POST("", categoryHandler.CreateCategory)
+				catGroup.GET("/:id", categoryHandler.GetCategoryByID)
+				catGroup.PUT("/:id", categoryHandler.UpdateCategory)
+				catGroup.DELETE("/:id", categoryHandler.DeleteCategory)
+			}
+
+			// Budget Limits
+			budgetGroup := protected.Group("/budgets")
+			{
+				budgetGroup.GET("", budgetHandler.ListBudgets)
+				budgetGroup.POST("", budgetHandler.CreateBudget)
+				budgetGroup.GET("/:id", budgetHandler.GetBudgetByID)
+				budgetGroup.PUT("/:id", budgetHandler.UpdateBudget)
+				budgetGroup.DELETE("/:id", budgetHandler.DeleteBudget)
+			}
+
+			// Recurring Configs
+			recurringGroup := protected.Group("/recurrings")
+			{
+				recurringGroup.GET("", recurringHandler.ListRecurrings)
+				recurringGroup.POST("", recurringHandler.CreateRecurring)
+				recurringGroup.GET("/:id", recurringHandler.GetRecurringByID)
+				recurringGroup.PUT("/:id", recurringHandler.UpdateRecurring)
+				recurringGroup.DELETE("/:id", recurringHandler.DeleteRecurring)
+			}
+
+			// Dashboard
+			dashGroup := protected.Group("/dashboard")
+			{
+				dashGroup.GET("/budget-summary", dashboardHandler.GetBudgetSummary)
+			}
 		}
 	}
 
 	return r
-}
+}

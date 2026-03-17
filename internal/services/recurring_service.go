@@ -1,0 +1,106 @@
+package services
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"walletx-be/internal/models"
+	"walletx-be/internal/repository"
+
+	"github.com/google/uuid"
+)
+
+var validFrequencies = map[string]bool{"weekly": true, "monthly": true, "yearly": true}
+
+// RecurringService defines the business logic contract for recurring transaction configs
+type RecurringService interface {
+	CreateRecurring(userID uuid.UUID, input CreateRecurringInput) (*models.RecurringConfig, error)
+	ListRecurrings(userID uuid.UUID) ([]models.RecurringConfig, error)
+	GetRecurringByID(id, userID uuid.UUID) (*models.RecurringConfig, error)
+	UpdateRecurring(id, userID uuid.UUID, input UpdateRecurringInput) (*models.RecurringConfig, error)
+	DeleteRecurring(id, userID uuid.UUID) error
+}
+
+// CreateRecurringInput is the DTO for creating a recurring config
+type CreateRecurringInput struct {
+	CategoryID uuid.UUID `json:"category_id" binding:"required"`
+	Amount     float64   `json:"amount"      binding:"required,gt=0"`
+	Frequency  string    `json:"frequency"   binding:"required"`
+	StartDate  time.Time `json:"start_date"  binding:"required"`
+}
+
+// UpdateRecurringInput is the DTO for updating a recurring config
+type UpdateRecurringInput struct {
+	Amount    float64   `json:"amount"    binding:"required,gt=0"`
+	Frequency string    `json:"frequency" binding:"required"`
+	StartDate time.Time `json:"start_date"`
+}
+
+type recurringService struct {
+	recurringRepo repository.RecurringRepository
+}
+
+func NewRecurringService(recurringRepo repository.RecurringRepository) RecurringService {
+	return &recurringService{recurringRepo: recurringRepo}
+}
+
+func (s *recurringService) CreateRecurring(userID uuid.UUID, input CreateRecurringInput) (*models.RecurringConfig, error) {
+	if !validFrequencies[input.Frequency] {
+		return nil, fmt.Errorf("invalid frequency '%s': must be 'weekly', 'monthly', or 'yearly'", input.Frequency)
+	}
+	if input.Amount <= 0 {
+		return nil, errors.New("amount must be greater than 0")
+	}
+
+	config := &models.RecurringConfig{
+		UserID:      userID,
+		CategoryID:  input.CategoryID,
+		Amount:      input.Amount,
+		Frequency:   input.Frequency,
+		StartDate:   input.StartDate,
+		NextDueDate: input.StartDate, // First due date equals start date
+	}
+
+	if err := s.recurringRepo.Create(config); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+func (s *recurringService) ListRecurrings(userID uuid.UUID) ([]models.RecurringConfig, error) {
+	return s.recurringRepo.List(userID)
+}
+
+func (s *recurringService) GetRecurringByID(id, userID uuid.UUID) (*models.RecurringConfig, error) {
+	return s.recurringRepo.GetByID(id, userID)
+}
+
+func (s *recurringService) UpdateRecurring(id, userID uuid.UUID, input UpdateRecurringInput) (*models.RecurringConfig, error) {
+	if !validFrequencies[input.Frequency] {
+		return nil, fmt.Errorf("invalid frequency '%s': must be 'weekly', 'monthly', or 'yearly'", input.Frequency)
+	}
+	if input.Amount <= 0 {
+		return nil, errors.New("amount must be greater than 0")
+	}
+
+	config, err := s.recurringRepo.GetByID(id, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	config.Amount = input.Amount
+	config.Frequency = input.Frequency
+	if !input.StartDate.IsZero() {
+		config.StartDate = input.StartDate
+	}
+
+	if err := s.recurringRepo.Update(config); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+func (s *recurringService) DeleteRecurring(id, userID uuid.UUID) error {
+	return s.recurringRepo.Delete(id, userID)
+}

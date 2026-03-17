@@ -12,12 +12,24 @@ import (
 	"gorm.io/gorm"
 )
 
+// CreateTransactionInput is the DTO for manually creating a transaction via the API
+type CreateTransactionInput struct {
+	Amount          float64    `json:"amount"           binding:"required,gt=0"`
+	Merchant        string     `json:"merchant"         binding:"required"`
+	Note            string     `json:"note"`
+	CategoryID      *uuid.UUID `json:"category_id"`
+	TransactionDate time.Time  `json:"transaction_date" binding:"required"`
+}
+
 // TransactionService defines the contract for transaction-related business logic
 type TransactionService interface {
 	// ProcessTransactionEmail is called by the IMAP worker to handle incoming emails
 	ProcessTransactionEmail(emailSender string, messageID string, rawBody string, date time.Time) error
-	
+
 	GetUserTransactions(userID uuid.UUID, limit, offset int) ([]models.Transaction, error)
+
+	// CreateManualTransaction allows the mobile app to create a transaction directly
+	CreateManualTransaction(userID uuid.UUID, input CreateTransactionInput) (*models.Transaction, error)
 }
 
 type transactionService struct {
@@ -47,7 +59,7 @@ func (s *transactionService) ProcessTransactionEmail(emailSender string, message
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			logEntry.Warn("⚠️ [Service] User not found for this email. Ignoring.")
-			return nil 
+			return nil
 		}
 		logEntry.WithError(err).Error("❌ [Service] Database error while finding user")
 		return err
@@ -55,31 +67,34 @@ func (s *transactionService) ProcessTransactionEmail(emailSender string, message
 
 	logEntry.WithField("user_id", user.ID).Info("✅ [Service] User matched. Parsing email body...")
 
-
-    // DEBUG RAW BODY --> melihat bentuk dan struktur body untuk menyesuaikan parser
-    logrus.Info("\n========== RAW EMAIL BODY ==========\n", rawBody, "\n====================================\n")
-
- 
+	// DEBUG RAW BODY --> melihat bentuk dan struktur body untuk menyesuaikan parser
+	logrus.Info("\n========== RAW EMAIL BODY ==========\n", rawBody, "\n====================================\n")
 
 	parsedData, err := s.parserService.ParseTransactionEmail(rawBody)
 	if err != nil {
 		logEntry.WithError(err).Error("❌ [Service] Failed to parse email body. Transaction skipped.")
-		return err 
+		return err
 	}
 
-	// Create the Transaction object
+	// MessageID pointer for the nullable DB column
+	msgID := messageID
+
+	// Create the Transaction object — IMAP source defaults
 	transaction := &models.Transaction{
 		UserID:          user.ID,
-		Amount:          parsedData.Amount,     
-		Merchant:        parsedData.Merchant,  
+		CategoryID:      nil,        // uncategorised by default
+		Amount:          parsedData.Amount,
+		Merchant:        parsedData.Merchant,
+		Note:            "",
 		TransactionDate: date,
-		MessageID:       messageID, 
+		MessageID:       &msgID,
+		IsRecurring:     false,
 	}
 
 	// Save to Database
 	err = s.transactionRepo.Create(transaction)
 	if err != nil {
-		// If the error is a duplicate key (meaning the email was already processed), can ignore it
+		// If the error is a duplicate key (meaning the email was already processed), ignore it
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			logEntry.Warn("⚠️ [Service] Transaction already exists (Duplicate Message-ID). Ignoring.")
 			return nil
@@ -92,17 +107,15 @@ func (s *transactionService) ProcessTransactionEmail(emailSender string, message
 	return nil
 }
 
-// GetUserTransactions user's list transaction
+// GetUserTransactions returns the user's paginated transaction list
 func (s *transactionService) GetUserTransactions(userID uuid.UUID, limit, offset int) ([]models.Transaction, error) {
-	// Pagination
 	if limit <= 0 || limit > 100 {
-		limit = 20 
+		limit = 20
 	}
 	if offset < 0 {
 		offset = 0
 	}
 
-	// Call Repository
 	transactions, err := s.transactionRepo.ListByUserID(userID, limit, offset)
 	if err != nil {
 		logrus.WithError(err).WithField("user_id", userID).Error("❌ [Service] Failed to get user transactions")
@@ -111,3 +124,32 @@ func (s *transactionService) GetUserTransactions(userID uuid.UUID, limit, offset
 
 	return transactions, nil
 }
+
+// CreateManualTransaction creates a transaction from the mobile app without an email source
+func (s *transactionService) CreateManualTransaction(userID uuid.UUID, input CreateTransactionInput) (*models.Transaction, error) {
+	if input.Amount <= 0 {
+		return nil, errors.New("amount must be greater than 0")
+	}
+	if input.Merchant == "" {
+		return nil, errors.New("merchant cannot be empty")
+	}
+
+	transaction := &models.Transaction{
+		UserID:          userID,
+		CategoryID:      input.CategoryID, // may be nil
+		Amount:          input.Amount,
+		Merchant:        input.Merchant,
+		Note:            input.Note,
+		TransactionDate: input.TransactionDate,
+		MessageID:       nil,  // no email source
+		IsRecurring:     false,
+	}
+
+	if err := s.transactionRepo.Create(transaction); err != nil {
+		logrus.WithError(err).Error("❌ [Service] Failed to save manual transaction")
+		return nil, err
+	}
+
+	logrus.WithField("user_id", userID).Info("🎉 [Service] Manual transaction saved successfully")
+	return transaction, nil
+}
