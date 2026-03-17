@@ -102,6 +102,7 @@ func SetupRouter(
 			dashGroup := protected.Group("/dashboard")
 			{
 				dashGroup.GET("/budget-summary", dashboardHandler.GetBudgetSummary)
+				dashGroup.GET("/calendar", dashboardHandler.GetDailyCalendar)
 			}
 		}
 	}

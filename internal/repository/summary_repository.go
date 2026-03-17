@@ -15,11 +15,18 @@ type SummaryDTO struct {
 	TransactionCount int64      `json:"transaction_count"`
 }
 
+// DailyTotalDTO holds the aggregated spending for a specific day.
+type DailyTotalDTO struct {
+	Day         time.Time `json:"day"`
+	TotalAmount float64   `json:"total_amount"`
+}
+
 // SummaryRepository defines the contract for querying the daily_expense_summary VIEW
 type SummaryRepository interface {
 	// GetSummary returns aggregated spending for the user within the given period.
 	// period accepted values: "weekly", "monthly"
 	GetSummary(userID uuid.UUID, period string) ([]SummaryDTO, error)
+	GetDailyTotal(userID uuid.UUID, month int, year int) ([]DailyTotalDTO, error)
 }
 
 type summaryRepository struct {
@@ -63,6 +70,31 @@ func (r *summaryRepository) GetSummary(userID uuid.UUID, period string) ([]Summa
 
 	var results []SummaryDTO
 	if err := r.db.Raw(query, userID, startDate).Scan(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// GetDailyTotal queries the daily_expense_summary VIEW grouped by day
+// to get the total spending for each day in a specific month and year.
+func (r *summaryRepository) GetDailyTotal(userID uuid.UUID, month int, year int) ([]DailyTotalDTO, error) {
+	startDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
+	endDate := startDate.AddDate(0, 1, 0)
+
+	query := `
+		SELECT
+			day,
+			SUM(total_amount) AS total_amount
+		FROM daily_expense_summary
+		WHERE user_id = ?
+		  AND day >= ?
+		  AND day < ?
+		GROUP BY day
+		ORDER BY day ASC
+	`
+
+	var results []DailyTotalDTO
+	if err := r.db.Raw(query, userID, startDate, endDate).Scan(&results).Error; err != nil {
 		return nil, err
 	}
 	return results, nil

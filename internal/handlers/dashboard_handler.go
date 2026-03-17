@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strconv"
 	"walletx-be/internal/services"
 	"walletx-be/internal/utils"
 
@@ -31,4 +32,41 @@ func (h *DashboardHandler) GetBudgetSummary(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, summary, "Budget summary retrieved successfully")
+}
+
+// GetDailyCalendar GET /api/v1/dashboard/calendar
+// Returns aggregated daily spending for a specific month and year.
+func (h *DashboardHandler) GetDailyCalendar(c *gin.Context) {
+	userID, ok := parseUserID(c)
+	if !ok {
+		return
+	}
+
+	monthStr := c.Query("month")
+	yearStr := c.Query("year")
+
+	if monthStr == "" || yearStr == "" {
+		utils.ErrorResponse(c, "month and year query parameters are required")
+		return
+	}
+
+	month, err := strconv.Atoi(monthStr)
+	if err != nil || month < 1 || month > 12 {
+		utils.ErrorResponse(c, "invalid month parameter")
+		return
+	}
+
+	year, err := strconv.Atoi(yearStr)
+	if err != nil || year < 1900 {
+		utils.ErrorResponse(c, "invalid year parameter")
+		return
+	}
+
+	dailyTotals, err := h.dashboardService.GetDailyTotal(userID, month, year)
+	if err != nil {
+		utils.ErrorResponse(c, "Failed to retrieve daily calendar data")
+		return
+	}
+
+	utils.SuccessResponse(c, dailyTotals, "Daily calendar retrieved successfully")
 }

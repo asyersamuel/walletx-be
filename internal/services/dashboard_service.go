@@ -18,6 +18,7 @@ type BudgetSummaryItem struct {
 // DashboardService defines the contract for dashboard-level aggregations
 type DashboardService interface {
 	GetBudgetSummary(userID uuid.UUID) ([]BudgetSummaryItem, error)
+	GetDailyTotal(userID uuid.UUID, month int, year int) ([]repository.DailyTotalDTO, error)
 }
 
 type dashboardService struct {
@@ -87,4 +88,9 @@ func (s *dashboardService) GetBudgetSummary(userID uuid.UUID) ([]BudgetSummaryIt
 	}
 
 	return result, nil
+}
+
+// GetDailyTotal fetches aggregated daily spending for a given month and year
+func (s *dashboardService) GetDailyTotal(userID uuid.UUID, month int, year int) ([]repository.DailyTotalDTO, error) {
+	return s.summaryRepo.GetDailyTotal(userID, month, year)
 }

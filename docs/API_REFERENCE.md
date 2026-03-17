@@ -409,4 +409,41 @@ Ringkasan pengeluaran riil *(actual spending)* versus *(vs)* batas batas anggara
   ]
 }
 ```
-*(Array data diolah dari gabungan referensi data tabel `category_limits` dan PostgreSQL VIEW `daily_expense_summary` untuk efisiensi.*
+*(Array data diolah dari gabungan referensi data tabel `category_limits` dan PostgreSQL VIEW `daily_expense_summary` untuk efisiensi.)*
+
+### 6.2 Get Daily Calendar (Aggregated Spending)
+Mengambil agregasi total pengeluaran harian pada bulan dan tahun tertentu (berguna untuk menampilkan total di kotak kalender frontend).
+- **Method**: `GET`
+- **URL**: `/api/v1/dashboard/calendar`
+- **Auth**: Bearer Token
+- **Query Params**:
+  - `month` (int, 1-12) - Wajib
+  - `year` (int, misal: 2026) - Wajib
+
+**Request Example:**
+```http
+GET /api/v1/dashboard/calendar?month=3&year=2026
+```
+
+**Response (200 OK):**
+```json
+{
+  "status": "success",
+  "message": "Daily calendar retrieved successfully",
+  "data": [
+    {
+      "day": "2026-03-10T00:00:00Z",
+      "total_amount": 150000
+    },
+    {
+      "day": "2026-03-15T00:00:00Z",
+      "total_amount": 75000
+    },
+    {
+      "day": "2026-03-16T00:00:00Z",
+      "total_amount": 200000
+    }
+  ]
+}
+```
+*(Data hanya dikembalikan untuk hari yang memiliki pengeluaran pada bulan dan tahun tersebut. Jika suatu hari tidak memiliki pengeluaran, maka tanggal tersebut tidak akan muncul di array)*
