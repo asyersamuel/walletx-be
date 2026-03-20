@@ -82,6 +82,7 @@ func SetupRouter(
 			budgetGroup := protected.Group("/budgets")
 			{
 				budgetGroup.GET("", budgetHandler.ListBudgets)
+				budgetGroup.GET("/progress", budgetHandler.GetBudgetProgress)
 				budgetGroup.POST("", budgetHandler.CreateBudget)
 				budgetGroup.GET("/:id", budgetHandler.GetBudgetByID)
 				budgetGroup.PUT("/:id", budgetHandler.UpdateBudget)

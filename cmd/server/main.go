@@ -51,7 +51,7 @@ func main() {
 	parserService    := services.NewParserService()
 	txService        := services.NewTransactionService(userRepo, transactionRepo, parserService)
 	categoryService  := services.NewCategoryService(categoryRepo)
-	budgetService    := services.NewBudgetService(budgetRepo)
+	budgetService    := services.NewBudgetService(budgetRepo, summaryRepo, db)
 	recurringService := services.NewRecurringService(recurringRepo)
 	dashboardService := services.NewDashboardService(budgetRepo, summaryRepo)
 

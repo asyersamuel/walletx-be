@@ -27,6 +27,7 @@ type SummaryRepository interface {
 	// period accepted values: "weekly", "monthly"
 	GetSummary(userID uuid.UUID, period string) ([]SummaryDTO, error)
 	GetDailyTotal(userID uuid.UUID, month int, year int) ([]DailyTotalDTO, error)
+	GetSpendingByCategoryAndDateRange(userID uuid.UUID, startDate time.Time, endDate time.Time) ([]SummaryDTO, error)
 }
 
 type summaryRepository struct {
@@ -70,6 +71,25 @@ func (r *summaryRepository) GetSummary(userID uuid.UUID, period string) ([]Summa
 
 	var results []SummaryDTO
 	if err := r.db.Raw(query, userID, startDate).Scan(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (r *summaryRepository) GetSpendingByCategoryAndDateRange(userID uuid.UUID, startDate time.Time, endDate time.Time) ([]SummaryDTO, error) {
+	query := `
+		SELECT
+			category_id,
+			SUM(total_amount)      AS total_amount,
+			SUM(transaction_count) AS transaction_count
+		FROM daily_expense_summary
+		WHERE user_id = ?
+		  AND day >= ?
+		  AND day <= ?
+		GROUP BY category_id
+	`
+	var results []SummaryDTO
+	if err := r.db.Raw(query, userID, startDate, endDate).Scan(&results).Error; err != nil {
 		return nil, err
 	}
 	return results, nil

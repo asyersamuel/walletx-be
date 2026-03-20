@@ -18,6 +18,8 @@ type BudgetRepository interface {
 	Delete(id, userID uuid.UUID) error
 	// GetActiveByUserID returns only active limits — used by DashboardService
 	GetActiveByUserID(userID uuid.UUID) ([]models.CategoryLimit, error)
+	FindByCategory(userID, categoryID uuid.UUID) (*models.CategoryLimit, error)
+	WithTx(tx *gorm.DB) BudgetRepository
 }
 
 type budgetRepository struct {
@@ -70,8 +72,27 @@ func (r *budgetRepository) Delete(id, userID uuid.UUID) error {
 
 func (r *budgetRepository) GetActiveByUserID(userID uuid.UUID) ([]models.CategoryLimit, error) {
 	var limits []models.CategoryLimit
-	if err := r.db.Where("user_id = ? AND is_active = true", userID).Find(&limits).Error; err != nil {
+	if err := r.db.Preload("Category").Where("user_id = ? AND is_active = true", userID).Find(&limits).Error; err != nil {
 		return nil, err
 	}
 	return limits, nil
+}
+
+func (r *budgetRepository) FindByCategory(userID, categoryID uuid.UUID) (*models.CategoryLimit, error) {
+	var limit models.CategoryLimit
+	err := r.db.Where("user_id = ? AND category_id = ?", userID, categoryID).First(&limit).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, gorm.ErrRecordNotFound
+		}
+		return nil, err
+	}
+	return &limit, nil
+}
+
+func (r *budgetRepository) WithTx(tx *gorm.DB) BudgetRepository {
+	if tx == nil {
+		return r
+	}
+	return &budgetRepository{db: tx}
 }

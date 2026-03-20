@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"walletx-be/internal/services"
 	"walletx-be/internal/utils"
@@ -56,6 +57,33 @@ func (h *BudgetHandler) ListBudgets(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, limits, "Budget limits retrieved successfully")
+}
+
+// GetBudgetProgress GET /api/v1/budgets/progress
+func (h *BudgetHandler) GetBudgetProgress(c *gin.Context) {
+	userID, ok := parseUserID(c)
+	if !ok {
+		return
+	}
+
+	dateStr := c.Query("date")
+	targetDate := time.Now()
+	if dateStr != "" {
+		parsed, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			utils.FailResponseWithStatus(c, http.StatusBadRequest, "Invalid date format. Use YYYY-MM-DD")
+			return
+		}
+		targetDate = parsed
+	}
+
+	progress, err := h.budgetService.GetBudgetProgress(userID, targetDate)
+	if err != nil {
+		utils.ErrorResponse(c, "Failed to retrieve budget progress")
+		return
+	}
+
+	utils.SuccessResponse(c, progress, "Budget progress retrieved successfully")
 }
 
 // GetBudgetByID GET /api/v1/budgets/:id
