@@ -254,7 +254,6 @@ Fitur pembatasan/rencana batas anggaran maksimum *spending* dalam kategori penge
       "user_id": "...",
       "category_id": "a4d8f8d9-e889-4b2a-8ea6-583eb1be6871",
       "limit_amount": 1000000,
-      "period": "monthly", // atau "weekly"
       "is_active": true,
       "created_at": "...",
       "updated_at": "..."
@@ -272,8 +271,7 @@ Fitur pembatasan/rencana batas anggaran maksimum *spending* dalam kategori penge
 ```json
 {
   "category_id": "a4d8f8d9-e889-4b2a-8ea6-583eb1be6871",
-  "limit_amount": 1000000,
-  "period": "monthly" // Harus "weekly" atau "monthly"
+  "limit_amount": 1000000
 }
 ```
 
@@ -292,7 +290,6 @@ Fitur pembatasan/rencana batas anggaran maksimum *spending* dalam kategori penge
 ```json
 {
   "limit_amount": 1500000,
-  "period": "monthly",
   "is_active": true // Jika false akan dianggap mati dari kalkulasi
 }
 ```
@@ -396,15 +393,13 @@ Ringkasan pengeluaran riil *(actual spending)* versus *(vs)* batas batas anggara
       "category_id": "a4d8f8d9-e889-4b2a-8ea6-583eb1be6871",
       "limit_amount": 1000000,      // Batas maksimal anggaran
       "spent_amount": 450000,       // Uang yang sudah dikonsumsi
-      "remaining_budget": 550000,   // Sisa uang sebelum jebol
-      "period": "monthly"           // Mengikuti konfigurasi budget
+      "remaining_budget": 550000    // Sisa uang sebelum jebol
     },
     {
       "category_id": "b3d8f8aa-e889-4b2a-8ea6-583eb1be6111",
       "limit_amount": 250000,
       "spent_amount": 300000,
-      "remaining_budget": -50000,   // Minus berarti Overbudget
-      "period": "weekly"
+      "remaining_budget": -50000    // Minus berarti Overbudget
     }
   ]
 }

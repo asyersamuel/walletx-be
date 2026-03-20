@@ -21,21 +21,42 @@ type CreateTransactionInput struct {
 	TransactionDate time.Time  `json:"transaction_date" binding:"required"`
 }
 
+type UpdateTransactionInput struct {
+	Amount          float64    `json:"amount"          binding:"required,gt=0"`
+	Merchant        string     `json:"merchant"        binding:"required"`
+	Note            string     `json:"note"`
+	CategoryID      *uuid.UUID `json:"category_id"`
+	TransactionDate time.Time  `json:"transaction_date" binding:"required"`
+}
+
 // TransactionService defines the contract for transaction-related business logic
 type TransactionService interface {
 	// ProcessTransactionEmail is called by the IMAP worker to handle incoming emails
 	ProcessTransactionEmail(emailSender string, messageID string, rawBody string, date time.Time) error
 
-	GetUserTransactions(userID uuid.UUID, limit, offset int) ([]models.Transaction, error)
 
 	// CreateManualTransaction allows the mobile app to create a transaction directly
 	CreateManualTransaction(userID uuid.UUID, input CreateTransactionInput) (*models.Transaction, error)
+
+	UpdateTransaction(userID, txID uuid.UUID, input UpdateTransactionInput) (*models.Transaction, error)
+	DeleteTransaction(userID, txID uuid.UUID) error
+
+	GetUserTransactions(userID uuid.UUID, limit, offset int, dateFilter, lastUpdated string) ([]models.Transaction, error)
+	SearchTransactions(userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error)
+	GetReportsByCategory(userID uuid.UUID, month, year int) ([]CategoryExpenseDTO, error)
+	GetAllTransactionsForExport(userID uuid.UUID, month, year int) ([]models.Transaction, error) 
 }
 
 type transactionService struct {
 	userRepo        repository.UserRepository
 	transactionRepo repository.TransactionRepository
 	parserService   ParserService
+}
+
+type CategoryExpenseDTO struct {
+    CategoryName string  `json:"category_name"`
+    TotalAmount  float64 `json:"total_amount"`
+    Percentage   float64 `json:"percentage"`
 }
 
 // NewTransactionService is the constructor
@@ -108,21 +129,21 @@ func (s *transactionService) ProcessTransactionEmail(emailSender string, message
 }
 
 // GetUserTransactions returns the user's paginated transaction list
-func (s *transactionService) GetUserTransactions(userID uuid.UUID, limit, offset int) ([]models.Transaction, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
-	if offset < 0 {
-		offset = 0
-	}
+func (s *transactionService) GetUserTransactions(userID uuid.UUID, limit, offset int, dateFilter, lastUpdated string) ([]models.Transaction, error) {
+    if limit <= 0 || limit > 100 {
+        limit = 20
+    }
+    if offset < 0 {
+        offset = 0
+    }
 
-	transactions, err := s.transactionRepo.ListByUserID(userID, limit, offset)
-	if err != nil {
-		logrus.WithError(err).WithField("user_id", userID).Error("❌ [Service] Failed to get user transactions")
-		return nil, err
-	}
+    transactions, err := s.transactionRepo.ListByUserID(userID, limit, offset, dateFilter, lastUpdated)
+    if err != nil {
+        logrus.WithError(err).WithField("user_id", userID).Error("❌ [Service] Failed to get user transactions")
+        return nil, err
+    }
 
-	return transactions, nil
+    return transactions, nil
 }
 
 // CreateManualTransaction creates a transaction from the mobile app without an email source
@@ -152,4 +173,90 @@ func (s *transactionService) CreateManualTransaction(userID uuid.UUID, input Cre
 
 	logrus.WithField("user_id", userID).Info("🎉 [Service] Manual transaction saved successfully")
 	return transaction, nil
-}
+}
+
+func (s *transactionService) SearchTransactions(userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error) {
+    return s.transactionRepo.SearchByMerchant(userID, query, limit, offset)
+}
+
+func (s *transactionService) GetReportsByCategory(userID uuid.UUID, month, year int) ([]CategoryExpenseDTO, error) {
+    rawStats, err := s.transactionRepo.GetExpensesByCategory(userID, month, year)
+    if err != nil { return nil, err }
+
+    // Hitung grand total untuk cari persentase
+    var grandTotal float64
+    for _, stat := range rawStats {
+        val, _ := stat["total_amount"].(float64)
+        grandTotal += val
+    }
+
+    var reports []CategoryExpenseDTO
+    for _, stat := range rawStats {
+        catName, _ := stat["category_name"].(string)
+        total, _ := stat["total_amount"].(float64)
+        
+        pct := 0.0
+        if grandTotal > 0 {
+            pct = (total / grandTotal) * 100
+        }
+
+        reports = append(reports, CategoryExpenseDTO{
+            CategoryName: catName,
+            TotalAmount:  total,
+            Percentage:   pct,
+        })
+    }
+    return reports, nil
+}
+
+func (s *transactionService) GetAllTransactionsForExport(userID uuid.UUID, month, year int) ([]models.Transaction, error) {
+    return s.transactionRepo.GetForExport(userID, month, year)
+}
+
+// UpdateTransaction memodifikasi transaksi yang sudah ada
+func (s *transactionService) UpdateTransaction(userID, txID uuid.UUID, input UpdateTransactionInput) (*models.Transaction, error) {
+	// Transaksi berdasarkan ID
+	tx, err := s.transactionRepo.GetByID(txID)
+	if err != nil {
+		return nil, errors.New("transaction not found")
+	}
+
+	// Verifikasi kepemilikan 
+	if tx.UserID != userID {
+		return nil, errors.New("unauthorized to update this transaction")
+	}
+
+	// Update field
+	tx.Amount = input.Amount
+	tx.Merchant = input.Merchant
+	tx.Note = input.Note
+	tx.CategoryID = input.CategoryID
+	tx.TransactionDate = input.TransactionDate
+
+	// Simpan ke database
+	if err := s.transactionRepo.Update(tx); err != nil {
+		logrus.WithError(err).Error("❌ [Service] Failed to update transaction")
+		return nil, err
+	}
+
+	return tx, nil
+}
+
+// DeleteTransaction menghapus transaksi
+func (s *transactionService) DeleteTransaction(userID, txID uuid.UUID) error {
+	tx, err := s.transactionRepo.GetByID(txID)
+	if err != nil {
+		return errors.New("transaction not found")
+	}
+
+	if tx.UserID != userID {
+		return errors.New("unauthorized to delete this transaction")
+	}
+
+	if err := s.transactionRepo.Delete(txID); err != nil {
+		logrus.WithError(err).Error("❌ [Service] Failed to delete transaction")
+		return err
+	}
+
+	return nil
+}

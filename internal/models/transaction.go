@@ -33,9 +33,9 @@ type Transaction struct {
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"deleted_at"`
 
 	// Associations
 	User     User      `gorm:"foreignKey:UserID"     json:"-"`
 	Category *Category `gorm:"foreignKey:CategoryID" json:"category,omitempty"`
-}
+}

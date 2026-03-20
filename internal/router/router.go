@@ -66,6 +66,10 @@ func SetupRouter(
 			{
 				txGroup.GET("", txHandler.GetUserTransactions)
 				txGroup.POST("", txHandler.CreateTransaction)
+				txGroup.PUT("/:id", txHandler.UpdateTransaction)
+				txGroup.DELETE("/:id", txHandler.DeleteTransaction)
+				txGroup.GET("/search", txHandler.SearchTransactions)
+				txGroup.GET("/export", txHandler.ExportCSV)
 			}
 
 			// Categories
@@ -105,8 +109,13 @@ func SetupRouter(
 				dashGroup.GET("/budget-summary", dashboardHandler.GetBudgetSummary)
 				dashGroup.GET("/calendar", dashboardHandler.GetDailyCalendar)
 			}
+
+			reportGroup := protected.Group("/reports")
+			{
+				reportGroup.GET("/expenses-by-category", txHandler.GetReports)
+			}
 		}
 	}
 
 	return r
-}
+}
