@@ -52,7 +52,7 @@ func main() {
 	txService        := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, parserService)
 	categoryService  := services.NewCategoryService(categoryRepo)
 	budgetService    := services.NewBudgetService(budgetRepo, summaryRepo, db)
-	recurringService := services.NewRecurringService(recurringRepo)
+	recurringService := services.NewRecurringService(recurringRepo, transactionRepo)
 	dashboardService := services.NewDashboardService(budgetRepo, summaryRepo)
 
 	// 5. Initialize Handlers

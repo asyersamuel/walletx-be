@@ -115,6 +115,12 @@ func SetupRouter(
 				reportGroup.GET("/expenses-by-category", txHandler.GetReports)
 			}
 		}
+
+		// ── Cron Routes (protected by secretly checked headers) ──────────────
+		cronGroup := api.Group("/cron")
+		{
+			cronGroup.POST("/recurring", recurringHandler.ProcessRecurringCron)
+		}
 	}
 
 	return r

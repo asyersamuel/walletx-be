@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.go",
+      "use": "@vercel/go"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/index.go"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/v1/cron/recurring", 
+      "schedule": "0 0 * * *"
+    }
+  ]
+}
