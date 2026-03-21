@@ -16,6 +16,7 @@ type CategoryRepository interface {
 	GetByID(id, userID uuid.UUID) (*models.Category, error)
 	Update(category *models.Category) error
 	Delete(id, userID uuid.UUID) error
+	GetByName(name string, userID uuid.UUID) (*models.Category, error)
 }
 
 type categoryRepository struct {
@@ -63,4 +64,13 @@ func (r *categoryRepository) Delete(id, userID uuid.UUID) error {
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+func (r *categoryRepository) GetByName(name string, userID uuid.UUID) (*models.Category, error) {
+	var category models.Category
+	err := r.db.Where("name ILIKE ? AND user_id = ?", name, userID).First(&category).Error
+	if err != nil {
+		return nil, err
+	}
+	return &category, nil
 }

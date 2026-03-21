@@ -49,7 +49,7 @@ func main() {
 	// 4. Initialize Services
 	authService      := services.NewAuthService(userRepo, cfg)
 	parserService    := services.NewParserService()
-	txService        := services.NewTransactionService(userRepo, transactionRepo, parserService)
+	txService        := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, parserService)
 	categoryService  := services.NewCategoryService(categoryRepo)
 	budgetService    := services.NewBudgetService(budgetRepo, summaryRepo, db)
 	recurringService := services.NewRecurringService(recurringRepo)

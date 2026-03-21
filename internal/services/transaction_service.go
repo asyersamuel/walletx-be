@@ -50,6 +50,7 @@ type TransactionService interface {
 type transactionService struct {
 	userRepo        repository.UserRepository
 	transactionRepo repository.TransactionRepository
+	categoryRepo    repository.CategoryRepository
 	parserService   ParserService
 }
 
@@ -60,10 +61,16 @@ type CategoryExpenseDTO struct {
 }
 
 // NewTransactionService is the constructor
-func NewTransactionService(userRepo repository.UserRepository, transactionRepo repository.TransactionRepository, parserService ParserService) TransactionService {
+func NewTransactionService(
+	userRepo repository.UserRepository, 
+	transactionRepo repository.TransactionRepository, 
+	categoryRepo repository.CategoryRepository, 
+	parserService ParserService,
+) TransactionService {
 	return &transactionService{
 		userRepo:        userRepo,
 		transactionRepo: transactionRepo,
+		categoryRepo:    categoryRepo,
 		parserService:   parserService,
 	}
 }
@@ -100,10 +107,20 @@ func (s *transactionService) ProcessTransactionEmail(emailSender string, message
 	// MessageID pointer for the nullable DB column
 	msgID := messageID
 
+	// Tentukan kategori otomatis untuk email: "Lainnya" jika ada
+	var categoryID *uuid.UUID
+	category, err := s.categoryRepo.GetByName("Lainnya", user.ID)
+	if err == nil && category != nil {
+		categoryID = &category.ID
+		logEntry.WithField("category", "Lainnya").Info("🏷️ [Service] Auto-categorized as 'Lainnya'")
+	} else {
+		logEntry.Info("❓ [Service] No 'Lainnya' category found, leaving uncategorised")
+	}
+
 	// Create the Transaction object — IMAP source defaults
 	transaction := &models.Transaction{
 		UserID:          user.ID,
-		CategoryID:      nil,        // uncategorised by default
+		CategoryID:      categoryID, 
 		Amount:          parsedData.Amount,
 		Merchant:        parsedData.Merchant,
 		Note:            "",
