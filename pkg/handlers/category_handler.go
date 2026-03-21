@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"walletx-be/internal/services"
-	"walletx-be/internal/utils"
+	"walletx-be/pkg/services"
+	"walletx-be/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"

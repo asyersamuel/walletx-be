@@ -4,8 +4,8 @@ import (
 	"time"
 
 	config "walletx-be/configs"
-	"walletx-be/internal/handlers"
-	"walletx-be/internal/middleware"
+	"walletx-be/pkg/handlers"
+	"walletx-be/pkg/middleware"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"

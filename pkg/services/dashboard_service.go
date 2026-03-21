@@ -1,7 +1,7 @@
 package services
 
 import (
-	"walletx-be/internal/repository"
+	"walletx-be/pkg/repository"
 
 	"github.com/google/uuid"
 )

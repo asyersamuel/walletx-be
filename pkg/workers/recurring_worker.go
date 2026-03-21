@@ -3,8 +3,8 @@ package workers
 import (
 	"time"
 
-	"walletx-be/internal/models"
-	"walletx-be/internal/repository"
+	"walletx-be/pkg/models"
+	"walletx-be/pkg/repository"
 
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"

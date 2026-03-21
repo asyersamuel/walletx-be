@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"walletx-be/configs"
-	"walletx-be/internal/services"
+	"walletx-be/pkg/services"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/oauth2"

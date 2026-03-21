@@ -2,7 +2,7 @@ package repository
 
 import (
 	"errors"
-	"walletx-be/internal/models"
+	"walletx-be/pkg/models"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"

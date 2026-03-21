@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"walletx-be/configs"
-	"walletx-be/internal/models"
-	"walletx-be/internal/repository"
+	"walletx-be/pkg/models"
+	"walletx-be/pkg/repository"
 
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/api/idtoken"

@@ -2,7 +2,7 @@ package workers
 
 import (
 	"io"
-	"walletx-be/internal/services"
+	"walletx-be/pkg/services"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"

@@ -5,11 +5,11 @@ import (
 	"os"
 
 	"walletx-be/configs"
-	"walletx-be/internal/database"
-	"walletx-be/internal/handlers"
-	"walletx-be/internal/repository"
-	"walletx-be/internal/router"
-	"walletx-be/internal/services"
+	"walletx-be/pkg/database"
+	"walletx-be/pkg/handlers"
+	"walletx-be/pkg/repository"
+	"walletx-be/pkg/router"
+	"walletx-be/pkg/services"
 
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
