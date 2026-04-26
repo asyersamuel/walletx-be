@@ -22,11 +22,11 @@ Aplikasi ini dibagi menjadi beberapa lapisan utama:
   - `handlers/`: Titik masuk HTTP (Controller) yang menggunakan framework Gin.
   - `router/`: Tempat mendaftarkan semua endpoint (`/api/...`) dan menyisipkan *middleware* (seperti CORS atau Autentikasi JWT).
   - `middleware/`: Terdapat penyekat (interceptor) untuk mengecek dan memvalidasi JWT Token pengguna sebelum dieksekusi oleh Handlers.
-  - `workers/`: Background Job (Pekerja Latar Belakang). Di sinilah `IMAPWorker` berada, ia berfungsi untuk menghubungkan secara konstan dengan server Email untuk menarik bukti transaksi (Bank) terbaru, yang dipicu menggunakan modul cron.
+  - `services/`: Berisi business logic termasuk IMAP Service untuk menarik email dari server.
   - `constants/`, `utils/`: Konstanta global dan fungsi-fungsi utilitas bersama (seperti generator string, waktu).
 
 ## Diagram Alur Eksekusi (User HTTP Request)
 Client (Mobile App) -> Router (Gin) -> Middleware (Validasi Token JWT) -> Handler -> Service (Business Logic) -> Repository -> PostgreSQL.
 
-## Diagram Alur Eksekusi (Background Worker IMAP)
-Cron Job (`robfig/cron/v3`) -> IMAP Worker (Ambil Email Masuk) -> Transaction Service -> Parser Service (Regex Ekstrak Data HTML/Text) -> Repository -> PostgreSQL.
+## Diagram Alur Eksekusi (Vercel Cron Jobs)
+Vercel Cron Jobs (HTTP) -> Handler `/api/v1/cron/` -> IMAP Service (Ambil Email Masuk) -> Transaction Service -> Parser Service -> Repository -> PostgreSQL.

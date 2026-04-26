@@ -3,7 +3,6 @@ package handlers
 import (
 	"errors"
 	"net/http"
-	"os"
 
 	"walletx-be/pkg/services"
 	"walletx-be/pkg/utils"
@@ -142,23 +141,3 @@ func (h *RecurringHandler) DeleteRecurring(c *gin.Context) {
 	utils.SuccessResponse(c, nil, "Recurring config deleted successfully")
 }
 
-// ProcessRecurringCron POST /api/cron/recurring
-func (h *RecurringHandler) ProcessRecurringCron(c *gin.Context) {
-	// Security check for cron secret
-	secret := c.GetHeader("X-Cron-Secret")
-	
-	// The variable "CRON_SECRET" should be set in Vercel environment variables or .env
-	expectedSecret := os.Getenv("CRON_SECRET")
-
-	if expectedSecret == "" || secret != expectedSecret {
-		utils.FailResponseWithStatus(c, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-
-	if err := h.recurringService.ProcessDueRecurrings(); err != nil {
-		utils.ErrorResponse(c, "Failed to process due recurring transactions")
-		return
-	}
-
-	utils.SuccessResponse(c, nil, "Processed due recurring transactions successfully")
-}

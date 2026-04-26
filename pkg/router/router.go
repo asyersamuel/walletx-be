@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func SetupRouter(
@@ -18,8 +19,10 @@ func SetupRouter(
 	budgetHandler     *handlers.BudgetHandler,
 	recurringHandler  *handlers.RecurringHandler,
 	dashboardHandler  *handlers.DashboardHandler,
+	cronHandler       *handlers.CronHandler,
 	jwtSecret         string,
 	cfg               *config.Config,
+	db                *gorm.DB,
 ) *gin.Engine {
 	r := gin.Default()
 
@@ -116,10 +119,13 @@ func SetupRouter(
 			}
 		}
 
-		// ── Cron Routes (protected by secretly checked headers) ──────────────
+		// ── Cron Routes (protected by CronAuthMiddleware) ────────────────────
 		cronGroup := api.Group("/cron")
+		cronGroup.Use(middleware.CronAuthMiddleware())
 		{
-			cronGroup.POST("/recurring", recurringHandler.ProcessRecurringCron)
+			cronGroup.GET("/keep-alive", cronHandler.KeepAlive)
+			cronGroup.POST("/imap", cronHandler.IMAPSync)
+			cronGroup.POST("/recurring", cronHandler.RecurringSync)
 		}
 	}
 

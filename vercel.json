@@ -14,8 +14,16 @@
   ],
   "crons": [
     {
-      "path": "/api/v1/cron/recurring", 
+      "path": "/api/v1/cron/keep-alive",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/v1/cron/imap",
+      "schedule": "0 17 * * *"
+    },
+    {
+      "path": "/api/v1/cron/recurring",
+      "schedule": "0 18 * * *"
     }
   ]
 }

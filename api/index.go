@@ -57,6 +57,10 @@ func init() {
 	recurringHandler := handlers.NewRecurringHandler(recurringService)
 	dashboardHandler := handlers.NewDashboardHandler(dashboardService)
 
+	// Services for Cron tasks
+	imapService := services.NewIMAPService(cfg.IMAP.Email, cfg.IMAP.Password, txService)
+	cronHandler := handlers.NewCronHandler(db, imapService, recurringService)
+
 	// In Serverless mode, we don't start the background worker. HTTP handles cron logic.
 
 	r := router.SetupRouter(
@@ -66,8 +70,10 @@ func init() {
 		budgetHandler,
 		recurringHandler,
 		dashboardHandler,
+		cronHandler,
 		cfg.JWT.Secret,
 		cfg,
+		db,
 	)
 
 	app = r

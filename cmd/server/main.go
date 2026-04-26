@@ -9,7 +9,6 @@ import (
 	"walletx-be/pkg/repository"
 	"walletx-be/pkg/router"
 	"walletx-be/pkg/services"
-	"walletx-be/pkg/workers"
 
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
@@ -63,26 +62,11 @@ func main() {
 	recurringHandler := handlers.NewRecurringHandler(recurringService)
 	dashboardHandler := handlers.NewDashboardHandler(dashboardService)
 
-	// 6. Initialize Workers & Cron
-	imapWorker      := workers.NewIMAPWorker(cfg.IMAP.Email, cfg.IMAP.Password, txService)
-	recurringWorker := workers.NewRecurringWorker(recurringRepo, transactionRepo)
-	cronScheduler   := workers.SetupCronJobs(imapWorker, recurringWorker)
+	// 6. Initialize Services for HTTP-triggered Cron tasks
+	imapService := services.NewIMAPService(cfg.IMAP.Email, cfg.IMAP.Password, txService)
+	cronHandler := handlers.NewCronHandler(db, imapService, recurringService)
 
-	// Start the cron scheduler in a non-blocking way
-	cronScheduler.Start()
-	logrus.Info("🛡️ [System] Background scheduler started successfully")
-
-	// Pastikan cron dimatikan saat aplikasi berhenti (Graceful Shutdown)
-	defer func() {
-		logrus.Info("🛑 [System] Stopping background scheduler...")
-		cronScheduler.Stop()
-	}()
-
-	// Development - run IMAP worker once at startup for testing
-	logrus.Info("🛠️ [Dev Mode] Menjalankan IMAP Worker satu kali saat startup...")
-	_ = imapWorker.ProcessUnseenEmails()
-
-	// 7. Setup Router Gin
+	// 8. Setup Router Gin
 	logrus.Info("🌐 Starting REST API Server...")
 	r := router.SetupRouter(
 		txHandler,
@@ -91,11 +75,13 @@ func main() {
 		budgetHandler,
 		recurringHandler,
 		dashboardHandler,
+		cronHandler,
 		cfg.JWT.Secret,
 		cfg,
+		db,
 	)
 
-	// 8. Run Server
+	// 9. Run Server
 	port := cfg.Server.Port
 	if port == "" {
 		port = "8080"
