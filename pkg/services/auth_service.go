@@ -10,6 +10,7 @@ import (
 	"walletx-be/pkg/repository"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"google.golang.org/api/idtoken"
 )
 
@@ -21,12 +22,14 @@ type GoogleAuthInput struct {
 type AuthService struct {
 	userRepo repository.UserRepository
 	cfg      *configs.Config
+	repo     repository.TokenBlacklistRepository
 }
 
-func NewAuthService(userRepo repository.UserRepository, cfg *configs.Config) *AuthService {
+func NewAuthService(userRepo repository.UserRepository, cfg *configs.Config, repo repository.TokenBlacklistRepository) *AuthService {
 	return &AuthService{
 		userRepo: userRepo,
 		cfg:      cfg,
+		repo:     repo,
 	}
 }
 
@@ -75,14 +78,46 @@ func (s *AuthService) ProcessGoogleAuth(input GoogleAuthInput) (*models.User, bo
 }
 
 func (s *AuthService) GenerateJWT(user *models.User) (string, error) {
+	jti := uuid.New().String()
 	claims := jwt.MapClaims{
 		"user_id": user.ID.String(),
 		"email":   user.Email,
+		"jti":     jti,
 		"exp":     time.Now().Add(time.Hour * time.Duration(s.cfg.JWT.Expiration)).Unix(),
 		"iat":     time.Now().Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	// Pastikan baris return ini berada di luar blok mana pun
 	return token.SignedString([]byte(s.cfg.JWT.Secret))
+}
+
+func (s *AuthService) Logout(ctx context.Context, tokenString string) error {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		return []byte(s.cfg.JWT.Secret), nil
+	})
+	if err != nil {
+		return fmt.Errorf("invalid token: %w", err)
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return fmt.Errorf("invalid token claims")
+	}
+
+	jti, exists := claims["jti"].(string)
+	if !exists || jti == "" {
+		return fmt.Errorf("token missing JTI claim")
+	}
+
+	exp, ok := claims["exp"].(float64)
+	if !ok {
+		return fmt.Errorf("token missing exp claim")
+	}
+
+	ttl := time.Until(time.Unix(int64(exp), 0))
+	if ttl <= 0 {
+		return nil
+	}
+
+	return s.repo.BlacklistToken(ctx, jti, ttl)
 }

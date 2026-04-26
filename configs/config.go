@@ -8,6 +8,7 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
+	Redis    RedisConfig
 	JWT      JWTConfig
 	App      AppConfig
 	Media    MediaConfig
@@ -25,6 +26,10 @@ type OAuthConfig struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURL  string
+}
+
+type RedisConfig struct {
+	URL string
 }
 
 type ServerConfig struct {
@@ -76,7 +81,7 @@ func Load() *Config {
 			KeyFile:  getEnv("KEY_FILE", "certs/key.pem"),
 		},
 		Database: DatabaseConfig{
-            // Support multiple env keys for convenience (Supabase and generic):
+            // Preferred: full connection URL, e.g., postgres://user:pass@host:5432/db?sslmode=require
             URL:      firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("DB_URL"), os.Getenv("SUPABASE_DB_URL")),
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnv("DB_PORT", "5432"),
@@ -84,6 +89,9 @@ func Load() *Config {
 			Password: getEnv("DB_PASSWORD", "password"),
 			DBName:   getEnv("DB_NAME", "backend_service"),
             SSLMode:  getEnv("DB_SSLMODE", "require"),
+		},
+		Redis: RedisConfig{
+			URL: getEnv("REDIS_URL", ""),
 		},
 		JWT: JWTConfig{
 			Secret:     getEnv("JWT_SECRET", "your-secret-key"),

@@ -6,6 +6,7 @@ import (
 	config "walletx-be/configs"
 	"walletx-be/pkg/handlers"
 	"walletx-be/pkg/middleware"
+	"walletx-be/pkg/repository"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -23,6 +24,7 @@ func SetupRouter(
 	jwtSecret         string,
 	cfg               *config.Config,
 	db                *gorm.DB,
+	blacklistRepo     repository.TokenBlacklistRepository,
 ) *gin.Engine {
 	r := gin.Default()
 
@@ -62,8 +64,13 @@ func SetupRouter(
 
 		// ── Protected Routes (require valid JWT) ─────────────────────────────
 		protected := api.Group("")
-		protected.Use(middleware.AuthMiddleware(jwtSecret))
+		protected.Use(middleware.AuthMiddleware(jwtSecret, blacklistRepo))
 		{
+			// Logout endpoint
+			authProtected := protected.Group("/auth")
+			{
+				authProtected.POST("/logout", authHandler.Logout)
+			}
 			// Transactions
 			txGroup := protected.Group("/transactions")
 			{

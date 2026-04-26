@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"walletx-be/configs"
+	"walletx-be/pkg/cache"
 	"walletx-be/pkg/database"
 	"walletx-be/pkg/handlers"
 	"walletx-be/pkg/repository"
@@ -34,6 +35,19 @@ func init() {
 		logrus.WithError(err).Fatal("❌ Failed to connect to database in Vercel Cold Start")
 	}
 
+	// Initialize Redis connection for token blacklisting
+	redisClient, err := cache.InitRedis(cfg.Redis)
+	if err != nil {
+		logrus.WithError(err).Warn("⚠️ Redis not connected, token blacklisting disabled")
+	}
+
+	var blacklistRepo repository.TokenBlacklistRepository
+	if redisClient != nil {
+		blacklistRepo = repository.NewTokenBlacklistRepository(redisClient)
+	} else {
+		blacklistRepo = repository.NewNoOpBlacklistRepository()
+	}
+
 	userRepo := repository.NewUserRepository(db)
 	transactionRepo := repository.NewTransactionRepository(db)
 	categoryRepo := repository.NewCategoryRepository(db)
@@ -41,7 +55,7 @@ func init() {
 	recurringRepo := repository.NewRecurringRepository(db)
 	summaryRepo := repository.NewSummaryRepository(db)
 
-	authService := services.NewAuthService(userRepo, cfg)
+	authService := services.NewAuthService(userRepo, cfg, blacklistRepo)
 	parserService := services.NewParserService()
 	txService := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, parserService)
 	categoryService := services.NewCategoryService(categoryRepo)
@@ -74,6 +88,7 @@ func init() {
 		cfg.JWT.Secret,
 		cfg,
 		db,
+		blacklistRepo,
 	)
 
 	app = r

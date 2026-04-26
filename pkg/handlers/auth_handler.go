@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"walletx-be/configs"
 	"walletx-be/pkg/services"
@@ -103,5 +104,25 @@ func (h *AuthHandler) processAuthLogic(c *gin.Context, input services.GoogleAuth
 			"user":  user,
 			"token": internalToken,
 		},
+	})
+}
+
+func (h *AuthHandler) Logout(c *gin.Context) {
+	authHeader := c.GetHeader("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Authorization header"})
+		return
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+	if err := h.authService.Logout(c.Request.Context(), tokenString); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process logout", "detail": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "success",
+		"message": "Logged out successfully",
 	})
 }

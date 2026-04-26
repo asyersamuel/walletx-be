@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"walletx-be/configs"
+	"walletx-be/pkg/cache"
 	"walletx-be/pkg/database"
 	"walletx-be/pkg/handlers"
 	"walletx-be/pkg/repository"
@@ -37,7 +38,15 @@ func main() {
 	}
 	logrus.Info("✅ Database connected and models migrated successfully")
 
-	// 3. Initialize Repositories
+	// 3. Initialize Redis connection for token blacklisting
+	redisClient, err := cache.InitRedis(cfg.Redis)
+	if err != nil {
+		logrus.WithError(err).Warn("⚠️ Redis not connected, token blacklisting disabled")
+	} else {
+		logrus.Info("✅ Redis connected successfully")
+	}
+
+	// 4. Initialize Repositories
 	userRepo        := repository.NewUserRepository(db)
 	transactionRepo := repository.NewTransactionRepository(db)
 	categoryRepo    := repository.NewCategoryRepository(db)
@@ -45,8 +54,15 @@ func main() {
 	recurringRepo   := repository.NewRecurringRepository(db)
 	summaryRepo     := repository.NewSummaryRepository(db)
 
-	// 4. Initialize Services
-	authService      := services.NewAuthService(userRepo, cfg)
+	var blacklistRepo repository.TokenBlacklistRepository
+	if redisClient != nil {
+		blacklistRepo = repository.NewTokenBlacklistRepository(redisClient)
+	} else {
+		blacklistRepo = repository.NewNoOpBlacklistRepository()
+	}
+
+	// 5. Initialize Services
+	authService      := services.NewAuthService(userRepo, cfg, blacklistRepo)
 	parserService    := services.NewParserService()
 	txService        := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, parserService)
 	categoryService  := services.NewCategoryService(categoryRepo)
@@ -79,6 +95,7 @@ func main() {
 		cfg.JWT.Secret,
 		cfg,
 		db,
+		blacklistRepo,
 	)
 
 	// 9. Run Server
