@@ -3,9 +3,11 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"walletx-be/configs"
 	"walletx-be/pkg/services"
+	"walletx-be/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/oauth2"
@@ -34,7 +36,7 @@ func (h *AuthHandler) HandleGoogleAuth(c *gin.Context) {
     var input services.GoogleAuthInput
 
     if err := c.ShouldBindJSON(&input); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "Data tidak valid", "detail": err.Error()})
+        utils.FailResponseWithDetails(c, "Data tidak valid", err.Error())
         return
     }
 
@@ -51,19 +53,19 @@ func (h *AuthHandler) GoogleLoginTest(c *gin.Context){
 func (h *AuthHandler) GoogleCallbackTest(c *gin.Context) {
 	code := c.Query("code")
 	if code == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Code tidak ditemukan dari Google"})
+		utils.FailResponse(c, "Code tidak ditemukan dari Google")
 		return
 	}
 
 	token, err := h.oauthConfig.Exchange(context.Background(), code)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal menukar kode dengan token", "detail": err.Error()})
+		utils.ErrorResponseWithDetails(c, "Gagal menukar kode dengan token", err.Error())
 		return
 	}
 
 	idToken, ok := token.Extra("id_token").(string)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tidak mendapatkan id_token dari Google"})
+		utils.ErrorResponse(c, "Tidak mendapatkan id_token dari Google")
 		return
 	}
 
@@ -78,14 +80,14 @@ func (h *AuthHandler) GoogleCallbackTest(c *gin.Context) {
 func (h *AuthHandler) processAuthLogic(c *gin.Context, input services.GoogleAuthInput) {
 	user, isNewUser, err := h.authService.ProcessGoogleAuth(input)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal memproses autentikasi", "detail": err.Error()})
+		utils.ErrorResponseWithDetails(c, "Gagal memproses autentikasi", err.Error())
 		return
 	}
 
 	// Buat token internal JWT untuk aplikasimu
 	internalToken, err := h.authService.GenerateJWT(user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal membuat token internal"})
+		utils.ErrorResponse(c, "Gagal membuat token internal")
 		return
 	}
 
@@ -96,12 +98,25 @@ func (h *AuthHandler) processAuthLogic(c *gin.Context, input services.GoogleAuth
 		statusCode = http.StatusCreated
 	}
 
-	c.JSON(statusCode, gin.H{
-		"status":  "success",
-		"message": message,
-		"data": gin.H{
-			"user":  user,
-			"token": internalToken,
-		},
-	})
+	utils.SuccessResponseWithStatus(c, statusCode, gin.H{
+		"user":  user,
+		"token": internalToken,
+	}, message)
+}
+
+func (h *AuthHandler) Logout(c *gin.Context) {
+	authHeader := c.GetHeader("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		utils.FailResponse(c, "Invalid Authorization header")
+		return
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+	if err := h.authService.Logout(c.Request.Context(), tokenString); err != nil {
+		utils.ErrorResponseWithDetails(c, "Failed to process logout", err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, nil, "Logged out successfully")
 }

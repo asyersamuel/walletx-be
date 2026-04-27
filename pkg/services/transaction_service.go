@@ -1,7 +1,9 @@
 package services
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"walletx-be/pkg/models"
@@ -32,19 +34,18 @@ type UpdateTransactionInput struct {
 // TransactionService defines the contract for transaction-related business logic
 type TransactionService interface {
 	// ProcessTransactionEmail is called by the IMAP worker to handle incoming emails
-	ProcessTransactionEmail(emailSender string, messageID string, rawBody string, date time.Time) error
-
+	ProcessTransactionEmail(ctx context.Context, emailSender string, messageID string, rawBody string, date time.Time) error
 
 	// CreateManualTransaction allows the mobile app to create a transaction directly
-	CreateManualTransaction(userID uuid.UUID, input CreateTransactionInput) (*models.Transaction, error)
+	CreateManualTransaction(ctx context.Context, userID uuid.UUID, input CreateTransactionInput) (*models.Transaction, error)
 
-	UpdateTransaction(userID, txID uuid.UUID, input UpdateTransactionInput) (*models.Transaction, error)
-	DeleteTransaction(userID, txID uuid.UUID) error
+	UpdateTransaction(ctx context.Context, userID, txID uuid.UUID, input UpdateTransactionInput) (*models.Transaction, error)
+	DeleteTransaction(ctx context.Context, userID, txID uuid.UUID) error
 
-	GetUserTransactions(userID uuid.UUID, limit, offset int, dateFilter, lastUpdated string) ([]models.Transaction, error)
-	SearchTransactions(userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error)
-	GetReportsByCategory(userID uuid.UUID, month, year int) ([]CategoryExpenseDTO, error)
-	GetAllTransactionsForExport(userID uuid.UUID, month, year int) ([]models.Transaction, error) 
+	GetUserTransactions(ctx context.Context, userID uuid.UUID, limit, offset int, dateFilter, lastUpdated string) ([]models.Transaction, error)
+	SearchTransactions(ctx context.Context, userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error)
+	GetReportsByCategory(ctx context.Context, userID uuid.UUID, month, year int) ([]CategoryExpenseDTO, error)
+	GetAllTransactionsForExport(ctx context.Context, userID uuid.UUID, month, year int) ([]models.Transaction, error) 
 }
 
 type transactionService struct {
@@ -52,6 +53,7 @@ type transactionService struct {
 	transactionRepo repository.TransactionRepository
 	categoryRepo    repository.CategoryRepository
 	parserService   ParserService
+	cacheRepo       repository.CacheRepository
 }
 
 type CategoryExpenseDTO struct {
@@ -66,17 +68,35 @@ func NewTransactionService(
 	transactionRepo repository.TransactionRepository, 
 	categoryRepo repository.CategoryRepository, 
 	parserService ParserService,
+	cacheRepo repository.CacheRepository,
 ) TransactionService {
 	return &transactionService{
 		userRepo:        userRepo,
 		transactionRepo: transactionRepo,
 		categoryRepo:    categoryRepo,
 		parserService:   parserService,
+		cacheRepo:       cacheRepo,
+	}
+}
+
+// invalidateDashboardCache removes cached dashboard data for a user
+func (s *transactionService) invalidateDashboardCache(ctx context.Context, userID uuid.UUID) {
+	// Delete budget summary cache
+	cacheKey := fmt.Sprintf("cache:dashboard:budget_summary:%s", userID.String())
+	_ = s.cacheRepo.DeleteCache(ctx, cacheKey)
+
+	// Delete daily calendar cache (all months - we delete common patterns)
+	// In production, consider using Redis SCAN for pattern-based deletion
+	for _, month := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} {
+		for _, year := range []int{2024, 2025, 2026, 2027} {
+			dailyKey := fmt.Sprintf("cache:dashboard:daily_total:%s:%d:%d", userID.String(), month, year)
+			_ = s.cacheRepo.DeleteCache(ctx, dailyKey)
+		}
 	}
 }
 
 // ProcessTransactionEmail handles the core logic of matching emails to users and saving transactions
-func (s *transactionService) ProcessTransactionEmail(emailSender string, messageID string, rawBody string, date time.Time) error {
+func (s *transactionService) ProcessTransactionEmail(ctx context.Context, emailSender string, messageID string, rawBody string, date time.Time) error {
 	logEntry := logrus.WithFields(logrus.Fields{
 		"sender":     emailSender,
 		"message_id": messageID,
@@ -141,12 +161,15 @@ func (s *transactionService) ProcessTransactionEmail(emailSender string, message
 		return err
 	}
 
+	// Invalidate dashboard cache after successful transaction creation
+	s.invalidateDashboardCache(ctx, user.ID)
+
 	logEntry.Info("🎉 [Service] Transaction successfully saved to database!")
 	return nil
 }
 
 // GetUserTransactions returns the user's paginated transaction list
-func (s *transactionService) GetUserTransactions(userID uuid.UUID, limit, offset int, dateFilter, lastUpdated string) ([]models.Transaction, error) {
+func (s *transactionService) GetUserTransactions(ctx context.Context, userID uuid.UUID, limit, offset int, dateFilter, lastUpdated string) ([]models.Transaction, error) {
     if limit <= 0 || limit > 100 {
         limit = 20
     }
@@ -164,7 +187,7 @@ func (s *transactionService) GetUserTransactions(userID uuid.UUID, limit, offset
 }
 
 // CreateManualTransaction creates a transaction from the mobile app without an email source
-func (s *transactionService) CreateManualTransaction(userID uuid.UUID, input CreateTransactionInput) (*models.Transaction, error) {
+func (s *transactionService) CreateManualTransaction(ctx context.Context, userID uuid.UUID, input CreateTransactionInput) (*models.Transaction, error) {
 	if input.Amount <= 0 {
 		return nil, errors.New("amount must be greater than 0")
 	}
@@ -188,15 +211,18 @@ func (s *transactionService) CreateManualTransaction(userID uuid.UUID, input Cre
 		return nil, err
 	}
 
+	// Invalidate dashboard cache after successful transaction creation
+	s.invalidateDashboardCache(ctx, userID)
+
 	logrus.WithField("user_id", userID).Info("🎉 [Service] Manual transaction saved successfully")
 	return transaction, nil
 }
 
-func (s *transactionService) SearchTransactions(userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error) {
+func (s *transactionService) SearchTransactions(ctx context.Context, userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error) {
     return s.transactionRepo.SearchByMerchant(userID, query, limit, offset)
 }
 
-func (s *transactionService) GetReportsByCategory(userID uuid.UUID, month, year int) ([]CategoryExpenseDTO, error) {
+func (s *transactionService) GetReportsByCategory(ctx context.Context, userID uuid.UUID, month, year int) ([]CategoryExpenseDTO, error) {
     rawStats, err := s.transactionRepo.GetExpensesByCategory(userID, month, year)
     if err != nil { return nil, err }
 
@@ -226,12 +252,12 @@ func (s *transactionService) GetReportsByCategory(userID uuid.UUID, month, year 
     return reports, nil
 }
 
-func (s *transactionService) GetAllTransactionsForExport(userID uuid.UUID, month, year int) ([]models.Transaction, error) {
+func (s *transactionService) GetAllTransactionsForExport(ctx context.Context, userID uuid.UUID, month, year int) ([]models.Transaction, error) {
     return s.transactionRepo.GetForExport(userID, month, year)
 }
 
 // UpdateTransaction memodifikasi transaksi yang sudah ada
-func (s *transactionService) UpdateTransaction(userID, txID uuid.UUID, input UpdateTransactionInput) (*models.Transaction, error) {
+func (s *transactionService) UpdateTransaction(ctx context.Context, userID, txID uuid.UUID, input UpdateTransactionInput) (*models.Transaction, error) {
 	// Transaksi berdasarkan ID
 	tx, err := s.transactionRepo.GetByID(txID)
 	if err != nil {
@@ -256,11 +282,14 @@ func (s *transactionService) UpdateTransaction(userID, txID uuid.UUID, input Upd
 		return nil, err
 	}
 
+	// Invalidate dashboard cache after successful update
+	s.invalidateDashboardCache(ctx, userID)
+
 	return tx, nil
 }
 
 // DeleteTransaction menghapus transaksi
-func (s *transactionService) DeleteTransaction(userID, txID uuid.UUID) error {
+func (s *transactionService) DeleteTransaction(ctx context.Context, userID, txID uuid.UUID) error {
 	tx, err := s.transactionRepo.GetByID(txID)
 	if err != nil {
 		return errors.New("transaction not found")
@@ -274,6 +303,9 @@ func (s *transactionService) DeleteTransaction(userID, txID uuid.UUID) error {
 		logrus.WithError(err).Error("❌ [Service] Failed to delete transaction")
 		return err
 	}
+
+	// Invalidate dashboard cache after successful delete
+	s.invalidateDashboardCache(ctx, userID)
 
 	return nil
 }

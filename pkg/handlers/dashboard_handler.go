@@ -25,7 +25,7 @@ func (h *DashboardHandler) GetBudgetSummary(c *gin.Context) {
 		return
 	}
 
-	summary, err := h.dashboardService.GetBudgetSummary(userID)
+	summary, err := h.dashboardService.GetBudgetSummary(c.Request.Context(), userID)
 	if err != nil {
 		utils.ErrorResponse(c, "Failed to retrieve budget summary")
 		return
@@ -62,7 +62,7 @@ func (h *DashboardHandler) GetDailyCalendar(c *gin.Context) {
 		return
 	}
 
-	dailyTotals, err := h.dashboardService.GetDailyTotal(userID, month, year)
+	dailyTotals, err := h.dashboardService.GetDailyTotal(c.Request.Context(), userID, month, year)
 	if err != nil {
 		utils.ErrorResponse(c, "Failed to retrieve daily calendar data")
 		return

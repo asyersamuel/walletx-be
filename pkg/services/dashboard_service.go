@@ -1,6 +1,9 @@
 package services
 
 import (
+	"context"
+	"fmt"
+	"time"
 	"walletx-be/pkg/repository"
 
 	"github.com/google/uuid"
@@ -16,26 +19,36 @@ type BudgetSummaryItem struct {
 
 // DashboardService defines the contract for dashboard-level aggregations
 type DashboardService interface {
-	GetBudgetSummary(userID uuid.UUID) ([]BudgetSummaryItem, error)
-	GetDailyTotal(userID uuid.UUID, month int, year int) ([]repository.DailyTotalDTO, error)
+	GetBudgetSummary(ctx context.Context, userID uuid.UUID) ([]BudgetSummaryItem, error)
+	GetDailyTotal(ctx context.Context, userID uuid.UUID, month int, year int) ([]repository.DailyTotalDTO, error)
 }
 
 type dashboardService struct {
 	budgetRepo  repository.BudgetRepository
 	summaryRepo repository.SummaryRepository
+	cacheRepo   repository.CacheRepository
 }
 
-func NewDashboardService(budgetRepo repository.BudgetRepository, summaryRepo repository.SummaryRepository) DashboardService {
+func NewDashboardService(budgetRepo repository.BudgetRepository, summaryRepo repository.SummaryRepository, cacheRepo repository.CacheRepository) DashboardService {
 	return &dashboardService{
 		budgetRepo:  budgetRepo,
 		summaryRepo: summaryRepo,
+		cacheRepo:   cacheRepo,
 	}
 }
 
 // GetBudgetSummary merges the user's active budget limits with their actual spending
 // from the daily_expense_summary VIEW, computing the remaining budget per category.
-func (s *dashboardService) GetBudgetSummary(userID uuid.UUID) ([]BudgetSummaryItem, error) {
-	// Fetch all active budget limits
+func (s *dashboardService) GetBudgetSummary(ctx context.Context, userID uuid.UUID) ([]BudgetSummaryItem, error) {
+	cacheKey := fmt.Sprintf("cache:dashboard:budget_summary:%s", userID.String())
+
+	// Try cache first
+	var cached []BudgetSummaryItem
+	if err := s.cacheRepo.GetCache(ctx, cacheKey, &cached); err == nil {
+		return cached, nil
+	}
+
+	// Cache miss - fetch from DB
 	limits, err := s.budgetRepo.GetActiveByUserID(userID)
 	if err != nil {
 		return nil, err
@@ -72,10 +85,30 @@ func (s *dashboardService) GetBudgetSummary(userID uuid.UUID) ([]BudgetSummaryIt
 		})
 	}
 
+	// Store in cache with 1 hour TTL (ignore cache errors)
+	_ = s.cacheRepo.SetCache(ctx, cacheKey, result, 1*time.Hour)
+
 	return result, nil
 }
 
 // GetDailyTotal fetches aggregated daily spending for a given month and year
-func (s *dashboardService) GetDailyTotal(userID uuid.UUID, month int, year int) ([]repository.DailyTotalDTO, error) {
-	return s.summaryRepo.GetDailyTotal(userID, month, year)
+func (s *dashboardService) GetDailyTotal(ctx context.Context, userID uuid.UUID, month int, year int) ([]repository.DailyTotalDTO, error) {
+	cacheKey := fmt.Sprintf("cache:dashboard:daily_total:%s:%d:%d", userID.String(), month, year)
+
+	// Try cache first
+	var cached []repository.DailyTotalDTO
+	if err := s.cacheRepo.GetCache(ctx, cacheKey, &cached); err == nil {
+		return cached, nil
+	}
+
+	// Cache miss - fetch from DB
+	result, err := s.summaryRepo.GetDailyTotal(userID, month, year)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store in cache with 1 hour TTL (ignore cache errors)
+	_ = s.cacheRepo.SetCache(ctx, cacheKey, result, 1*time.Hour)
+
+	return result, nil
 }

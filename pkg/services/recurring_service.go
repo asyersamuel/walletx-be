@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -41,12 +42,14 @@ type UpdateRecurringInput struct {
 type recurringService struct {
 	recurringRepo   repository.RecurringRepository
 	transactionRepo repository.TransactionRepository
+	cacheRepo       repository.CacheRepository
 }
 
-func NewRecurringService(recurringRepo repository.RecurringRepository, transactionRepo repository.TransactionRepository) RecurringService {
+func NewRecurringService(recurringRepo repository.RecurringRepository, transactionRepo repository.TransactionRepository, cacheRepo repository.CacheRepository) RecurringService {
 	return &recurringService{
 		recurringRepo:   recurringRepo,
 		transactionRepo: transactionRepo,
+		cacheRepo:       cacheRepo,
 	}
 }
 
@@ -120,6 +123,9 @@ func (s *recurringService) ProcessDueRecurrings() error {
 		return nil
 	}
 
+	// Track unique user IDs for cache invalidation
+	affectedUsers := make(map[uuid.UUID]bool)
+
 	for _, config := range configs {
 		catID := config.CategoryID
 		transaction := &models.Transaction{
@@ -137,11 +143,33 @@ func (s *recurringService) ProcessDueRecurrings() error {
 			continue // keep processing other configs even if one fails
 		}
 
+		// Mark user as affected for cache invalidation
+		affectedUsers[config.UserID] = true
+
 		config.NextDueDate = s.advanceDate(config.NextDueDate, config.Frequency)
 		_ = s.recurringRepo.Update(&config)
 	}
 
+	// Invalidate dashboard cache for all affected users
+	ctx := context.Background()
+	for userID := range affectedUsers {
+		s.invalidateDashboardCache(ctx, userID)
+	}
+
 	return nil
+}
+
+// invalidateDashboardCache removes cached dashboard data for a user
+func (s *recurringService) invalidateDashboardCache(ctx context.Context, userID uuid.UUID) {
+	cacheKey := fmt.Sprintf("cache:dashboard:budget_summary:%s", userID.String())
+	_ = s.cacheRepo.DeleteCache(ctx, cacheKey)
+
+	for _, month := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} {
+		for _, year := range []int{2024, 2025, 2026, 2027} {
+			dailyKey := fmt.Sprintf("cache:dashboard:daily_total:%s:%d:%d", userID.String(), month, year)
+			_ = s.cacheRepo.DeleteCache(ctx, dailyKey)
+		}
+	}
 }
 
 func (s *recurringService) advanceDate(t time.Time, frequency string) time.Time {

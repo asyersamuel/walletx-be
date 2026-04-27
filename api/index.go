@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"walletx-be/configs"
+	"walletx-be/pkg/cache"
 	"walletx-be/pkg/database"
 	"walletx-be/pkg/handlers"
 	"walletx-be/pkg/repository"
@@ -34,6 +35,22 @@ func init() {
 		logrus.WithError(err).Fatal("❌ Failed to connect to database in Vercel Cold Start")
 	}
 
+	// Initialize Redis connection for token blacklisting
+	redisClient, err := cache.InitRedis(cfg.Redis)
+	if err != nil {
+		logrus.WithError(err).Warn("⚠️ Redis not connected, token blacklisting disabled")
+	}
+
+	var blacklistRepo repository.TokenBlacklistRepository
+	var cacheRepo repository.CacheRepository
+	if redisClient != nil {
+		blacklistRepo = repository.NewTokenBlacklistRepository(redisClient)
+		cacheRepo = repository.NewCacheRepository(redisClient)
+	} else {
+		blacklistRepo = repository.NewNoOpBlacklistRepository()
+		cacheRepo = repository.NewNoOpCacheRepository()
+	}
+
 	userRepo := repository.NewUserRepository(db)
 	transactionRepo := repository.NewTransactionRepository(db)
 	categoryRepo := repository.NewCategoryRepository(db)
@@ -41,14 +58,13 @@ func init() {
 	recurringRepo := repository.NewRecurringRepository(db)
 	summaryRepo := repository.NewSummaryRepository(db)
 
-	authService := services.NewAuthService(userRepo, cfg)
+	authService := services.NewAuthService(userRepo, cfg, blacklistRepo)
 	parserService := services.NewParserService()
-	txService := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, parserService)
+	txService := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, parserService, cacheRepo)
 	categoryService := services.NewCategoryService(categoryRepo)
 	budgetService := services.NewBudgetService(budgetRepo, summaryRepo, db)
-	// Passing transactionRepo here as agreed in the plan
-	recurringService := services.NewRecurringService(recurringRepo, transactionRepo)
-	dashboardService := services.NewDashboardService(budgetRepo, summaryRepo)
+	recurringService := services.NewRecurringService(recurringRepo, transactionRepo, cacheRepo)
+	dashboardService := services.NewDashboardService(budgetRepo, summaryRepo, cacheRepo)
 
 	authHandler := handlers.NewAuthHandler(authService, cfg)
 	txHandler := handlers.NewTransactionHandler(txService)
@@ -74,6 +90,7 @@ func init() {
 		cfg.JWT.Secret,
 		cfg,
 		db,
+		blacklistRepo,
 	)
 
 	app = r
