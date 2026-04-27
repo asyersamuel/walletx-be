@@ -51,3 +51,5 @@ certs/
 *.key
 
 .env
+.env.example
+env
