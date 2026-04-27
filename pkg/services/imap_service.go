@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"io"
 
 	"github.com/emersion/go-imap"
@@ -108,7 +109,7 @@ func (s *IMAPService) ProcessUnseenEmails() error {
 			}
 		}
 
-		err := s.TxService.ProcessTransactionEmail(fromEmail, messageID, rawBody, date)
+		err := s.TxService.ProcessTransactionEmail(context.Background(), fromEmail, messageID, rawBody, date)
 		if err != nil {
 			logEntry.WithError(err).Error("❌ [IMAP] Failed to process transaction in service")
 			continue

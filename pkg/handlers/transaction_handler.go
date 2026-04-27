@@ -39,7 +39,7 @@ func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
     lastUpdated := c.Query("last_updated_at")
 
     // Oper variabel lastUpdated ini sebagai parameter ke-5 ke dalam Service
-    transactions, err := h.txService.GetUserTransactions(userID, limit, offset, dateFilter, lastUpdated)
+    transactions, err := h.txService.GetUserTransactions(c.Request.Context(), userID, limit, offset, dateFilter, lastUpdated)
     if err != nil {
         utils.ErrorResponse(c, "Failed to retrieve transactions")
         return
@@ -61,7 +61,7 @@ func (h *TransactionHandler) CreateTransaction(c *gin.Context) {
 		return
 	}
 
-	transaction, err := h.txService.CreateManualTransaction(userID, input)
+	transaction, err := h.txService.CreateManualTransaction(c.Request.Context(), userID, input)
 	if err != nil {
 		utils.FailResponseWithStatus(c, http.StatusBadRequest, err.Error())
 		return
@@ -90,7 +90,7 @@ func (h *TransactionHandler) UpdateTransaction(c *gin.Context) {
 		return
 	}
 
-	transaction, err := h.txService.UpdateTransaction(userID, txID, input)
+	transaction, err := h.txService.UpdateTransaction(c.Request.Context(), userID, txID, input)
 	if err != nil {
 		utils.FailResponseWithStatus(c, http.StatusBadRequest, err.Error())
 		return
@@ -113,7 +113,7 @@ func (h *TransactionHandler) DeleteTransaction(c *gin.Context) {
 		return
 	}
 
-	err = h.txService.DeleteTransaction(userID, txID)
+	err = h.txService.DeleteTransaction(c.Request.Context(), userID, txID)
 	if err != nil {
 		utils.FailResponseWithStatus(c, http.StatusBadRequest, err.Error())
 		return
@@ -130,7 +130,7 @@ func (h *TransactionHandler) SearchTransactions(c *gin.Context) {
     limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
     offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
-    results, err := h.txService.SearchTransactions(userID, query, limit, offset)
+    results, err := h.txService.SearchTransactions(c.Request.Context(), userID, query, limit, offset)
     if err != nil {
         utils.ErrorResponse(c, "Failed to search transactions")
         return
@@ -145,7 +145,7 @@ func (h *TransactionHandler) GetReports(c *gin.Context) {
     month, _ := strconv.Atoi(c.Query("month"))
     year, _ := strconv.Atoi(c.Query("year"))
 
-    reports, err := h.txService.GetReportsByCategory(userID, month, year)
+    reports, err := h.txService.GetReportsByCategory(c.Request.Context(), userID, month, year)
     if err != nil {
         utils.ErrorResponse(c, "Failed to get reports")
         return
@@ -160,7 +160,7 @@ func (h *TransactionHandler) ExportCSV(c *gin.Context) {
     month, _ := strconv.Atoi(c.Query("month"))
     year, _ := strconv.Atoi(c.Query("year"))
 
-    txs, err := h.txService.GetAllTransactionsForExport(userID, month, year)
+    txs, err := h.txService.GetAllTransactionsForExport(c.Request.Context(), userID, month, year)
     if err != nil {
         utils.ErrorResponse(c, "Failed to export data")
         return

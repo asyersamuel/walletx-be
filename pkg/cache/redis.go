@@ -8,6 +8,7 @@ import (
 	"walletx-be/configs"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/sirupsen/logrus"
 )
 
 func InitRedis(cfg configs.RedisConfig) (*redis.Client, error) {
@@ -30,9 +31,12 @@ func InitRedis(cfg configs.RedisConfig) (*redis.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	logrus.Info("Connecting to Redis (Upstash)...")
 	if err := client.Ping(ctx).Err(); err != nil {
+		logrus.WithError(err).Warn("Failed to connect to Redis during initialization")
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
+	logrus.Info("Successfully connected to Redis (Upstash)")
 	return client, nil
 }

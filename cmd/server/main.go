@@ -55,20 +55,23 @@ func main() {
 	summaryRepo     := repository.NewSummaryRepository(db)
 
 	var blacklistRepo repository.TokenBlacklistRepository
+	var cacheRepo repository.CacheRepository
 	if redisClient != nil {
 		blacklistRepo = repository.NewTokenBlacklistRepository(redisClient)
+		cacheRepo = repository.NewCacheRepository(redisClient)
 	} else {
 		blacklistRepo = repository.NewNoOpBlacklistRepository()
+		cacheRepo = repository.NewNoOpCacheRepository()
 	}
 
 	// 5. Initialize Services
 	authService      := services.NewAuthService(userRepo, cfg, blacklistRepo)
 	parserService    := services.NewParserService()
-	txService        := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, parserService)
+	txService        := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, parserService, cacheRepo)
 	categoryService  := services.NewCategoryService(categoryRepo)
 	budgetService    := services.NewBudgetService(budgetRepo, summaryRepo, db)
-	recurringService := services.NewRecurringService(recurringRepo, transactionRepo)
-	dashboardService := services.NewDashboardService(budgetRepo, summaryRepo)
+	recurringService := services.NewRecurringService(recurringRepo, transactionRepo, cacheRepo)
+	dashboardService := services.NewDashboardService(budgetRepo, summaryRepo, cacheRepo)
 
 	// 5. Initialize Handlers
 	authHandler      := handlers.NewAuthHandler(authService, cfg)

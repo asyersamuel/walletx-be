@@ -2,10 +2,10 @@ package middleware
 
 import (
 	"context"
-	"net/http"
 	"strings"
 
 	"walletx-be/pkg/repository"
+	"walletx-be/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -27,7 +27,7 @@ func AuthMiddleware(jwtSecret string, blacklistRepo repository.TokenBlacklistRep
 		}
 
 		if tokenString == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Token required"})
+			utils.UnauthorizedResponse(c, "Token required")
 			c.Abort()
 			return
 		}
@@ -37,7 +37,7 @@ func AuthMiddleware(jwtSecret string, blacklistRepo repository.TokenBlacklistRep
 			return []byte(jwtSecret), nil
 		})
 		if err != nil || !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			utils.UnauthorizedResponse(c, "Invalid or expired token")
 			c.Abort()
 			return
 		}
@@ -45,7 +45,7 @@ func AuthMiddleware(jwtSecret string, blacklistRepo repository.TokenBlacklistRep
 		// 4. Extract claims
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
+			utils.UnauthorizedResponse(c, "Invalid token claims")
 			c.Abort()
 			return
 		}
@@ -54,12 +54,12 @@ func AuthMiddleware(jwtSecret string, blacklistRepo repository.TokenBlacklistRep
 		if jti, exists := claims["jti"].(string); exists && jti != "" {
 			blacklisted, err := blacklistRepo.IsTokenBlacklisted(context.Background(), jti)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to validate token"})
+				utils.ErrorResponse(c, "Failed to validate token")
 				c.Abort()
 				return
 			}
 			if blacklisted {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Token has been revoked"})
+				utils.UnauthorizedResponse(c, "Token has been revoked")
 				c.Abort()
 				return
 			}

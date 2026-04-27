@@ -7,6 +7,7 @@ import (
 	"walletx-be/pkg/handlers"
 	"walletx-be/pkg/middleware"
 	"walletx-be/pkg/repository"
+	"walletx-be/pkg/utils"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -48,7 +49,7 @@ func SetupRouter(
 	{
 		// Health check
 		api.GET("/ping", func(c *gin.Context) {
-			c.JSON(200, gin.H{"message": "WalletX API is running!"})
+			utils.SuccessResponse(c, nil, "WalletX API is running!")
 		})
 
 		// ── Auth Routes (public) ─────────────────────────────────────────────
