@@ -36,7 +36,7 @@ func (h *CronHandler) KeepAlive(c *gin.Context) {
 	utils.SuccessResponse(c, nil, "Keep-alive successful")
 }
 
-// IMAPSync POST /api/v1/cron/imap
+// IMAPSync GET /api/v1/cron/imap
 // Triggers the IMAP email extraction worker.
 func (h *CronHandler) IMAPSync(c *gin.Context) {
 	logrus.Info("[Cron] Starting IMAP Email Sync...")
@@ -51,7 +51,7 @@ func (h *CronHandler) IMAPSync(c *gin.Context) {
 	utils.SuccessResponse(c, nil, "IMAP sync executed successfully")
 }
 
-// RecurringSync POST /api/v1/cron/recurring
+// RecurringSync GET /api/v1/cron/recurring
 // Triggers the recurring transaction processor.
 func (h *CronHandler) RecurringSync(c *gin.Context) {
 	logrus.Info("[Cron] Starting Recurring Processor...")
