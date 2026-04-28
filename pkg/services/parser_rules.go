@@ -13,6 +13,15 @@ type MerchantRule struct {
 // Urutkan dari yang paling spesifik ke paling umum.
 var merchantRules = []MerchantRule{
 	// ─────────────────────────────────────────────────────────────────
+	// Mandiri (Livin' by Mandiri) — format: Penerima\nNama Merchant
+	// Lebih spesifik: newline-delimited, tanpa titik dua.
+	// ─────────────────────────────────────────────────────────────────
+	{
+		BankName: "Mandiri (Livin)",
+		Regex:    regexp.MustCompile(`(?i)Penerima\s*\r?\n([^\r\n]+)`),
+	},
+
+	// ─────────────────────────────────────────────────────────────────
 	// BNI (wondr by BNI) — format: *Penerima*\nNama Merchant
 	// ─────────────────────────────────────────────────────────────────
 	{
@@ -21,19 +30,12 @@ var merchantRules = []MerchantRule{
 	},
 
 	// ─────────────────────────────────────────────────────────────────
-	// Mandiri (Livin' by Mandiri) — format: Penerima : Nama / Ke Nama : Nama
-	// ─────────────────────────────────────────────────────────────────
-	{
-		BankName: "Mandiri (Livin)",
-		Regex:    regexp.MustCompile(`(?i)(?:Penerima|Ke\s+Nama)\s*:\s*([^\r\n]+)`),
-	},
-
-	// ─────────────────────────────────────────────────────────────────
 	// BRI (BRImo) — format: Kepada : Nama Merchant
+	// \b memastikan 'Kepada' tidak cocok di tengah string base64.
 	// ─────────────────────────────────────────────────────────────────
 	{
-		BankName: "BRI (BRImo)",
-		Regex:    regexp.MustCompile(`(?i)Kepada\s*:\s*([^\r\n]+)`),
+		BankName: "BRI (Brimo)",
+		Regex:    regexp.MustCompile(`(?i)\bKepada\b\s*:\s*([^\r\n]+)`),
 	},
 
 	// ─────────────────────────────────────────────────────────────────
@@ -41,7 +43,7 @@ var merchantRules = []MerchantRule{
 	// ─────────────────────────────────────────────────────────────────
 	{
 		BankName: "BCA",
-		Regex:    regexp.MustCompile(`(?i)(?:Nama\s+Rekening\s+Tujuan|Ke\s+Rekening)\s*:\s*([^\r\n]+)`),
+		Regex:    regexp.MustCompile(`(?i)(?:Nama Rekening Tujuan|Ke Rekening)\s*:\s*([^\r\n]+)`),
 	},
 
 	// ─────────────────────────────────────────────────────────────────
@@ -78,14 +80,17 @@ var merchantRules = []MerchantRule{
 
 	// ─────────────────────────────────────────────────────────────────
 	// GoPay / OVO / Dana / ShopeePay (E-Wallet umum)
-	// Format: Ke : Nama / Pembayaran ke : Nama / Merchant : Nama
+	// \b pada setiap kata kunci mencegah kecocokan di dalam header base64/DKIM.
 	// ─────────────────────────────────────────────────────────────────
 	{
-		BankName: "E-Wallet (GoPay/OVO/Dana/ShopeePay)",
-		Regex:    regexp.MustCompile(`(?i)(?:Ke|Kepada|Merchant|Pembayaran\s+ke)\s*:?\s*([A-Za-z0-9\s\.\-&']+?)(?:\s*(?:Rp|IDR)|\r?\n|$)`),
+		BankName: "E-Wallet/Umum",
+		Regex:    regexp.MustCompile(`(?i)\b(?:ke|kepada|merchant|pembayaran)\b\s*:?\s*([A-Za-z0-9\s]+)(?:Rp|\n|\.|$)`),
 	},
 }
 
-// amountRegex mendeteksi nominal uang dalam format Rupiah Indonesia.
-// Menangani format: Rp1.000.000 / Rp 1.000.000 / IDR 1.000.000 / Rp1.000.000,00
-var amountRegex = regexp.MustCompile(`(?i)(?:Rp|IDR)\.?\s*([\d\.]+(?:,\d{1,2})?)`)
+// amountRegex ultra-resilient: tidak menggunakan \b karena Go RE2 gagal pada
+// Non-Breaking Space (\xA0) dan batas tag HTML di email yang di-forward.
+// Guard kiri: awal baris (^) ATAU karakter non-kata (spasi, >, :, &nbsp;, dll.)
+// sehingga string base64 seperti 'f7Rp7c' atau 'a1Rp2' tetap diabaikan.
+// Menangani: " Rp14.000", ">Rp14.000<", "IDR 1.000.000", ": Rp 50.000"
+var amountRegex = regexp.MustCompile(`(?im)(?:^|[^\w])(?:Rp|IDR)\s*\.?\s*([\d][\d\.]*)`)
