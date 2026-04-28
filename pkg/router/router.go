@@ -132,8 +132,8 @@ func SetupRouter(
 		cronGroup.Use(middleware.CronAuthMiddleware())
 		{
 			cronGroup.GET("/keep-alive", cronHandler.KeepAlive)
-			cronGroup.POST("/imap", cronHandler.IMAPSync)
-			cronGroup.POST("/recurring", cronHandler.RecurringSync)
+			cronGroup.GET("/imap", cronHandler.IMAPSync)
+			cronGroup.GET("/recurring", cronHandler.RecurringSync)
 		}
 	}
 
