@@ -159,5 +159,5 @@ func (h *CategoryHandler) DeleteCategory(c *gin.Context) {
 		return
 	}
 
-	utils.SuccessResponse(c, nil, "Category deleted successfully")
+	c.Status(http.StatusNoContent)
 }

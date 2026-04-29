@@ -14,6 +14,10 @@ import (
 	"gorm.io/gorm"
 )
 
+// Import repository types for filtering and sorting
+type TransactionFilters = repository.TransactionFilters
+type SortOption = repository.SortOption
+
 // CreateTransactionInput is the DTO for manually creating a transaction via the API
 type CreateTransactionInput struct {
 	Amount          float64    `json:"amount"           binding:"required,gt=0"`
@@ -23,12 +27,14 @@ type CreateTransactionInput struct {
 	TransactionDate time.Time  `json:"transaction_date" binding:"required"`
 }
 
+// UpdateTransactionInput is the DTO for updating a transaction via PUT
+// All fields are optional (pointers) to support partial updates within PUT semantics
 type UpdateTransactionInput struct {
-	Amount          float64    `json:"amount"          binding:"required,gt=0"`
-	Merchant        string     `json:"merchant"        binding:"required"`
-	Note            string     `json:"note"`
+	Amount          *float64   `json:"amount"`
+	Merchant        *string    `json:"merchant"`
+	Note            *string    `json:"note"`
 	CategoryID      *uuid.UUID `json:"category_id"`
-	TransactionDate time.Time  `json:"transaction_date" binding:"required"`
+	TransactionDate *time.Time `json:"transaction_date"`
 }
 
 // TransactionService defines the contract for transaction-related business logic
@@ -42,8 +48,10 @@ type TransactionService interface {
 	UpdateTransaction(ctx context.Context, userID, txID uuid.UUID, input UpdateTransactionInput) (*models.Transaction, error)
 	DeleteTransaction(ctx context.Context, userID, txID uuid.UUID) error
 
-	GetUserTransactions(ctx context.Context, userID uuid.UUID, limit, offset int, dateFilter, lastUpdated string) ([]models.Transaction, error)
+	GetUserTransactions(ctx context.Context, userID uuid.UUID, limit, offset int, filters TransactionFilters, sort SortOption) ([]models.Transaction, error)
+	GetUserTransactionsWithCount(ctx context.Context, userID uuid.UUID, limit, offset int, filters TransactionFilters, sort SortOption) ([]models.Transaction, int, error)
 	SearchTransactions(ctx context.Context, userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error)
+	SearchTransactionsCount(ctx context.Context, userID uuid.UUID, query string) (int, error)
 	GetReportsByCategory(ctx context.Context, userID uuid.UUID, month, year int) ([]CategoryExpenseDTO, error)
 	GetAllTransactionsForExport(ctx context.Context, userID uuid.UUID, month, year int) ([]models.Transaction, error) 
 }
@@ -168,8 +176,8 @@ func (s *transactionService) ProcessTransactionEmail(ctx context.Context, emailS
 	return nil
 }
 
-// GetUserTransactions returns the user's paginated transaction list
-func (s *transactionService) GetUserTransactions(ctx context.Context, userID uuid.UUID, limit, offset int, dateFilter, lastUpdated string) ([]models.Transaction, error) {
+// GetUserTransactions returns the user's paginated transaction list with filtering and sorting
+func (s *transactionService) GetUserTransactions(ctx context.Context, userID uuid.UUID, limit, offset int, filters TransactionFilters, sort SortOption) ([]models.Transaction, error) {
     if limit <= 0 || limit > 100 {
         limit = 20
     }
@@ -177,13 +185,47 @@ func (s *transactionService) GetUserTransactions(ctx context.Context, userID uui
         offset = 0
     }
 
-    transactions, err := s.transactionRepo.ListByUserID(userID, limit, offset, dateFilter, lastUpdated)
+    // Set default exclude deleted for normal queries
+    if filters.LastUpdated == "" {
+        filters.ExcludeDeleted = true
+    }
+
+    transactions, err := s.transactionRepo.ListByUserID(userID, limit, offset, filters, sort)
     if err != nil {
         logrus.WithError(err).WithField("user_id", userID).Error("❌ [Service] Failed to get user transactions")
         return nil, err
     }
 
     return transactions, nil
+}
+
+// GetUserTransactionsWithCount returns transactions with total count for pagination metadata
+func (s *transactionService) GetUserTransactionsWithCount(ctx context.Context, userID uuid.UUID, limit, offset int, filters TransactionFilters, sort SortOption) ([]models.Transaction, int, error) {
+    if limit <= 0 || limit > 100 {
+        limit = 20
+    }
+    if offset < 0 {
+        offset = 0
+    }
+
+    // Set default exclude deleted for normal queries
+    if filters.LastUpdated == "" {
+        filters.ExcludeDeleted = true
+    }
+
+    transactions, err := s.transactionRepo.ListByUserID(userID, limit, offset, filters, sort)
+    if err != nil {
+        logrus.WithError(err).WithField("user_id", userID).Error("❌ [Service] Failed to get user transactions")
+        return nil, 0, err
+    }
+
+    totalCount, err := s.transactionRepo.CountByUserID(userID, filters)
+    if err != nil {
+        logrus.WithError(err).WithField("user_id", userID).Error("❌ [Service] Failed to count transactions")
+        return nil, 0, err
+    }
+
+    return transactions, int(totalCount), nil
 }
 
 // CreateManualTransaction creates a transaction from the mobile app without an email source
@@ -222,6 +264,11 @@ func (s *transactionService) SearchTransactions(ctx context.Context, userID uuid
     return s.transactionRepo.SearchByMerchant(userID, query, limit, offset)
 }
 
+func (s *transactionService) SearchTransactionsCount(ctx context.Context, userID uuid.UUID, query string) (int, error) {
+    count, err := s.transactionRepo.CountSearchByMerchant(userID, query)
+    return int(count), err
+}
+
 func (s *transactionService) GetReportsByCategory(ctx context.Context, userID uuid.UUID, month, year int) ([]CategoryExpenseDTO, error) {
     rawStats, err := s.transactionRepo.GetExpensesByCategory(userID, month, year)
     if err != nil { return nil, err }
@@ -256,27 +303,52 @@ func (s *transactionService) GetAllTransactionsForExport(ctx context.Context, us
     return s.transactionRepo.GetForExport(userID, month, year)
 }
 
-// UpdateTransaction memodifikasi transaksi yang sudah ada
+// UpdateTransaction performs partial update - only non-nil fields will be updated
+// This prevents accidentally overwriting fields with empty values
 func (s *transactionService) UpdateTransaction(ctx context.Context, userID, txID uuid.UUID, input UpdateTransactionInput) (*models.Transaction, error) {
-	// Transaksi berdasarkan ID
+	// Get existing transaction
 	tx, err := s.transactionRepo.GetByID(txID)
 	if err != nil {
-		return nil, errors.New("transaction not found")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, gorm.ErrRecordNotFound
+		}
+		return nil, err
 	}
 
-	// Verifikasi kepemilikan 
+	// Verify ownership
 	if tx.UserID != userID {
 		return nil, errors.New("unauthorized to update this transaction")
 	}
 
-	// Update field
-	tx.Amount = input.Amount
-	tx.Merchant = input.Merchant
-	tx.Note = input.Note
-	tx.CategoryID = input.CategoryID
-	tx.TransactionDate = input.TransactionDate
+	// Only update fields that are explicitly provided (non-nil)
+	// This prevents accidental data loss from partial updates
+	if input.Amount != nil {
+		if *input.Amount <= 0 {
+			return nil, errors.New("amount must be greater than 0")
+		}
+		tx.Amount = *input.Amount
+	}
 
-	// Simpan ke database
+	if input.Merchant != nil {
+		if *input.Merchant == "" {
+			return nil, errors.New("merchant cannot be empty")
+		}
+		tx.Merchant = *input.Merchant
+	}
+
+	if input.Note != nil {
+		tx.Note = *input.Note
+	}
+
+	if input.CategoryID != nil {
+		tx.CategoryID = input.CategoryID
+	}
+
+	if input.TransactionDate != nil {
+		tx.TransactionDate = *input.TransactionDate
+	}
+
+	// Save to database
 	if err := s.transactionRepo.Update(tx); err != nil {
 		logrus.WithError(err).Error("❌ [Service] Failed to update transaction")
 		return nil, err
@@ -292,7 +364,10 @@ func (s *transactionService) UpdateTransaction(ctx context.Context, userID, txID
 func (s *transactionService) DeleteTransaction(ctx context.Context, userID, txID uuid.UUID) error {
 	tx, err := s.transactionRepo.GetByID(txID)
 	if err != nil {
-		return errors.New("transaction not found")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return gorm.ErrRecordNotFound
+		}
+		return err
 	}
 
 	if tx.UserID != userID {

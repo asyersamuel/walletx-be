@@ -14,6 +14,21 @@ import (
 	"gorm.io/gorm"
 )
 
+// SetupRouter configures all application routes with proper middleware
+// 
+// RESTful API Design Principles Applied:
+// - Resource-based naming (plural nouns): /transactions, /categories, /budgets
+// - HTTP method semantics: GET (read), POST (create), PUT (update), DELETE (remove)
+// - Proper status codes: 200 OK, 201 Created, 204 No Content, 400 Bad Request, 404 Not Found, 500 Server Error
+// - Consistent response envelope: { status, message, data, meta, timestamp }
+// - Query parameters for filtering, sorting, pagination
+// - Content negotiation for CSV export (Accept: text/csv)
+//
+// Route Groups:
+// - /api/v1 (base)
+//   - /auth (public) - Google OAuth login
+//   - protected (JWT required) - All CRUD operations and reports
+//   - /cron (secret-based auth) - Background job triggers (Vercel cron compatible)
 func SetupRouter(
 	txHandler         *handlers.TransactionHandler,
 	authHandler       *handlers.AuthHandler,
@@ -64,26 +79,31 @@ func SetupRouter(
 		}
 
 		// ── Protected Routes (require valid JWT) ─────────────────────────────
+		// All routes under this group are protected by JWT authentication middleware
 		protected := api.Group("")
 		protected.Use(middleware.AuthMiddleware(jwtSecret, blacklistRepo))
 		{
-			// Logout endpoint
+			// Auth endpoints
 			authProtected := protected.Group("/auth")
 			{
 				authProtected.POST("/logout", authHandler.Logout)
 			}
-			// Transactions
+
+			// Transactions - Full CRUD with filtering, sorting, pagination
+			// GET    /transactions          - List with filters (?q=, ?date_from=, ?amount_min=, ?sort=)
+			// POST   /transactions          - Create new transaction
+			// GET    /transactions/:id      - Get single transaction (via generic handler if needed)
+			// PUT    /transactions/:id      - Update transaction (partial update supported)
+			// DELETE /transactions/:id      - Delete transaction (returns 204 No Content)
 			txGroup := protected.Group("/transactions")
 			{
 				txGroup.GET("", txHandler.GetUserTransactions)
 				txGroup.POST("", txHandler.CreateTransaction)
 				txGroup.PUT("/:id", txHandler.UpdateTransaction)
 				txGroup.DELETE("/:id", txHandler.DeleteTransaction)
-				txGroup.GET("/search", txHandler.SearchTransactions)
-				txGroup.GET("/export", txHandler.ExportCSV)
 			}
 
-			// Categories
+			// Categories - Full CRUD for user-defined categories
 			catGroup := protected.Group("/categories")
 			{
 				catGroup.GET("", categoryHandler.ListCategories)
@@ -93,7 +113,13 @@ func SetupRouter(
 				catGroup.DELETE("/:id", categoryHandler.DeleteCategory)
 			}
 
-			// Budget Limits
+			// Budgets - Budget limit management with progress tracking
+			// GET    /budgets          - List all budgets
+			// GET    /budgets/progress - Get budget vs actual spending progress
+			// POST   /budgets          - Create new budget
+			// GET    /budgets/:id      - Get single budget
+			// PUT    /budgets/:id      - Update budget
+			// DELETE /budgets/:id      - Delete budget
 			budgetGroup := protected.Group("/budgets")
 			{
 				budgetGroup.GET("", budgetHandler.ListBudgets)
@@ -104,7 +130,7 @@ func SetupRouter(
 				budgetGroup.DELETE("/:id", budgetHandler.DeleteBudget)
 			}
 
-			// Recurring Configs
+			// Recurring Transactions - Recurring transaction configuration
 			recurringGroup := protected.Group("/recurrings")
 			{
 				recurringGroup.GET("", recurringHandler.ListRecurrings)
@@ -114,16 +140,15 @@ func SetupRouter(
 				recurringGroup.DELETE("/:id", recurringHandler.DeleteRecurring)
 			}
 
-			// Dashboard
-			dashGroup := protected.Group("/dashboard")
-			{
-				dashGroup.GET("/budget-summary", dashboardHandler.GetBudgetSummary)
-				dashGroup.GET("/calendar", dashboardHandler.GetDailyCalendar)
-			}
-
+			// Reports - Analytics and reporting endpoints (moved from /dashboard)
+			// GET /reports/expenses         - Expenses grouped by category
+			// GET /reports/budget-summary   - Budget summary with actual spending
+			// GET /reports/daily-calendar   - Daily spending calendar for month/year
 			reportGroup := protected.Group("/reports")
 			{
-				reportGroup.GET("/expenses-by-category", txHandler.GetReports)
+				reportGroup.GET("/expenses", txHandler.GetReports)
+				reportGroup.GET("/budget-summary", dashboardHandler.GetBudgetSummary)
+				reportGroup.GET("/daily-calendar", dashboardHandler.GetDailyCalendar)
 			}
 		}
 

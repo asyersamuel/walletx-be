@@ -107,7 +107,7 @@ func (h *AuthHandler) processAuthLogic(c *gin.Context, input services.GoogleAuth
 func (h *AuthHandler) Logout(c *gin.Context) {
 	authHeader := c.GetHeader("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		utils.FailResponse(c, "Invalid Authorization header")
+		utils.FailResponseWithStatus(c, http.StatusBadRequest, "Invalid Authorization header")
 		return
 	}
 
@@ -118,5 +118,5 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		return
 	}
 
-	utils.SuccessResponse(c, nil, "Logged out successfully")
+	c.Status(http.StatusNoContent)
 }

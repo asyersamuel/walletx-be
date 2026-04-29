@@ -138,6 +138,6 @@ func (h *RecurringHandler) DeleteRecurring(c *gin.Context) {
 		return
 	}
 
-	utils.SuccessResponse(c, nil, "Recurring config deleted successfully")
+	c.Status(http.StatusNoContent)
 }
 

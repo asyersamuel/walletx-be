@@ -1,16 +1,19 @@
 package handlers
 
 import (
+	"encoding/csv"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
-	"encoding/csv"
-	"fmt"
+	"strings"
 
 	"walletx-be/pkg/services"
 	"walletx-be/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type TransactionHandler struct {
@@ -24,28 +27,101 @@ func NewTransactionHandler(txService services.TransactionService) *TransactionHa
 }
 
 // GetUserTransactions handles GET /api/v1/transactions
+// RESTful API endpoint with full filtering, sorting, and pagination support
+//
+// Query Parameters:
+// - Pagination: limit (default: 50, max: 100), offset (default: 0)
+// - Date Filter: date (exact), date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)
+// - Amount Filter: amount_min, amount_max
+// - Search: q (searches merchant name)
+// - Sorting: sort=field:direction (e.g., transaction_date:desc, amount:asc)
+// - Delta Sync: last_updated_at (ISO 8601 timestamp)
+// - CSV Export: Accept header = text/csv
 func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
-    userID, ok := parseUserID(c) 
-    if !ok {
-        return
-    }
+	userID, ok := parseUserID(c)
+	if !ok {
+		return
+	}
 
-    limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50")) 
-    offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-    
-    dateFilter := c.Query("date")
-    
-    // Tangkap query parameter last_updated_at dari Frontend
-    lastUpdated := c.Query("last_updated_at")
+	acceptHeader := c.GetHeader("Accept")
+	isCSVExport := acceptHeader == "text/csv"
 
-    // Oper variabel lastUpdated ini sebagai parameter ke-5 ke dalam Service
-    transactions, err := h.txService.GetUserTransactions(c.Request.Context(), userID, limit, offset, dateFilter, lastUpdated)
-    if err != nil {
-        utils.ErrorResponse(c, "Failed to retrieve transactions")
-        return
-    }
+	if isCSVExport {
+		h.exportCSV(c, userID)
+		return
+	}
 
-    utils.SuccessResponse(c, transactions, "Transactions retrieved successfully")
+	// Parse pagination
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+	// Parse filters
+	filters := services.TransactionFilters{
+		DateFrom:     c.Query("date_from"),
+		DateTo:       c.Query("date_to"),
+		LastUpdated:  c.Query("last_updated_at"),
+		ExcludeDeleted: true,
+	}
+
+	// Support legacy single date filter
+	if dateFilter := c.Query("date"); dateFilter != "" {
+		filters.DateFrom = dateFilter
+		filters.DateTo = dateFilter
+	}
+
+	// Parse amount range filters
+	if amountMinStr := c.Query("amount_min"); amountMinStr != "" {
+		if amountMin, err := strconv.ParseFloat(amountMinStr, 64); err == nil {
+			filters.AmountMin = &amountMin
+		}
+	}
+	if amountMaxStr := c.Query("amount_max"); amountMaxStr != "" {
+		if amountMax, err := strconv.ParseFloat(amountMaxStr, 64); err == nil {
+			filters.AmountMax = &amountMax
+		}
+	}
+
+	// Parse sorting
+	sort := services.SortOption{
+		Field:     "transaction_date",
+		Direction: "DESC",
+	}
+	if sortParam := c.Query("sort"); sortParam != "" {
+		parts := strings.Split(sortParam, ":")
+		if len(parts) == 2 {
+			sort.Field = parts[0]
+			sort.Direction = strings.ToUpper(parts[1])
+		}
+	}
+
+	// Handle search query
+	searchQuery := c.Query("q")
+
+	var transactions interface{}
+	var totalCount int
+	var err error
+
+	if searchQuery != "" {
+		// Search mode: search by merchant name
+		results, err := h.txService.SearchTransactions(c.Request.Context(), userID, searchQuery, limit, offset)
+		if err != nil {
+			utils.ErrorResponse(c, "Failed to search transactions")
+			return
+		}
+		count, _ := h.txService.SearchTransactionsCount(c.Request.Context(), userID, searchQuery)
+		transactions = results
+		totalCount = count
+	} else {
+		// List mode: with filters and sorting
+		transactions, totalCount, err = h.txService.GetUserTransactionsWithCount(c.Request.Context(), userID, limit, offset, filters, sort)
+		if err != nil {
+			utils.ErrorResponse(c, "Failed to retrieve transactions")
+			return
+		}
+	}
+
+	pagination := utils.CalculatePaginationMeta(totalCount, limit, offset)
+	utils.SuccessResponseWithPagination(c, transactions, "Transactions retrieved successfully", pagination)
 }
 
 // CreateTransaction handles POST /api/v1/transactions — manual transaction creation
@@ -71,6 +147,7 @@ func (h *TransactionHandler) CreateTransaction(c *gin.Context) {
 }
 
 // UpdateTransaction handles PUT /api/v1/transactions/:id
+// Supports partial updates - only provided fields will be updated
 func (h *TransactionHandler) UpdateTransaction(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -92,6 +169,14 @@ func (h *TransactionHandler) UpdateTransaction(c *gin.Context) {
 
 	transaction, err := h.txService.UpdateTransaction(c.Request.Context(), userID, txID, input)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			utils.NotFoundResponse(c, "Transaction not found")
+			return
+		}
+		if err.Error() == "unauthorized to update this transaction" {
+			utils.ForbiddenResponse(c, "You are not authorized to access this transaction")
+			return
+		}
 		utils.FailResponseWithStatus(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -115,77 +200,95 @@ func (h *TransactionHandler) DeleteTransaction(c *gin.Context) {
 
 	err = h.txService.DeleteTransaction(c.Request.Context(), userID, txID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			utils.NotFoundResponse(c, "Transaction not found")
+			return
+		}
+		if err.Error() == "unauthorized to delete this transaction" {
+			utils.ForbiddenResponse(c, "You are not authorized to access this transaction")
+			return
+		}
 		utils.FailResponseWithStatus(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	utils.SuccessResponse(c, nil, "Transaction deleted successfully")
+	c.Status(http.StatusNoContent)
 }
 
-func (h *TransactionHandler) SearchTransactions(c *gin.Context) {
-    userID, ok := parseUserID(c)
-    if !ok { return }
-
-    query := c.Query("q")
-    limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-    offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-
-    results, err := h.txService.SearchTransactions(c.Request.Context(), userID, query, limit, offset)
-    if err != nil {
-        utils.ErrorResponse(c, "Failed to search transactions")
-        return
-    }
-    utils.SuccessResponse(c, results, "Search results")
-}
-
+// GetReports handles GET /api/v1/reports/expenses
+// RESTful reporting endpoint with grouping support
+// Query Parameters: month, year, group_by (default: category)
 func (h *TransactionHandler) GetReports(c *gin.Context) {
-    userID, ok := parseUserID(c)
-    if !ok { return }
+	userID, ok := parseUserID(c)
+	if !ok {
+		return
+	}
 
-    month, _ := strconv.Atoi(c.Query("month"))
-    year, _ := strconv.Atoi(c.Query("year"))
+	month, _ := strconv.Atoi(c.Query("month"))
+	year, _ := strconv.Atoi(c.Query("year"))
+	groupBy := c.DefaultQuery("group_by", "category")
 
-    reports, err := h.txService.GetReportsByCategory(c.Request.Context(), userID, month, year)
-    if err != nil {
-        utils.ErrorResponse(c, "Failed to get reports")
-        return
-    }
-    utils.SuccessResponse(c, reports, "Reports retrieved")
+	if groupBy != "category" {
+		utils.FailResponseWithStatus(c, http.StatusBadRequest, "Unsupported group_by value. Use 'category'")
+		return
+	}
+
+	reports, err := h.txService.GetReportsByCategory(c.Request.Context(), userID, month, year)
+	if err != nil {
+		utils.ErrorResponse(c, "Failed to get reports")
+		return
+	}
+	utils.SuccessResponse(c, reports, "Reports retrieved")
 }
 
-func (h *TransactionHandler) ExportCSV(c *gin.Context) {
-    userID, ok := parseUserID(c)
-    if !ok { return }
+// exportCSV handles CSV export via content negotiation
+func (h *TransactionHandler) exportCSV(c *gin.Context, userID uuid.UUID) {
+	monthStr := c.Query("month")
+	yearStr := c.Query("year")
 
-    month, _ := strconv.Atoi(c.Query("month"))
-    year, _ := strconv.Atoi(c.Query("year"))
+	if monthStr == "" || yearStr == "" {
+		utils.FailResponseWithStatus(c, http.StatusBadRequest, "month and year query parameters are required for CSV export")
+		return
+	}
 
-    txs, err := h.txService.GetAllTransactionsForExport(c.Request.Context(), userID, month, year)
-    if err != nil {
-        utils.ErrorResponse(c, "Failed to export data")
-        return
-    }
+	month, err := strconv.Atoi(monthStr)
+	if err != nil || month < 1 || month > 12 {
+		utils.FailResponseWithStatus(c, http.StatusBadRequest, "invalid month parameter")
+		return
+	}
 
-    // Set header agar browser/mobile tahu ini file download
-    c.Header("Content-Disposition", "attachment; filename=transactions.csv")
-    c.Header("Content-Type", "text/csv")
-    c.Header("Transfer-Encoding", "chunked")
+	year, err := strconv.Atoi(yearStr)
+	if err != nil || year < 1900 {
+		utils.FailResponseWithStatus(c, http.StatusBadRequest, "invalid year parameter")
+		return
+	}
 
-    writer := csv.NewWriter(c.Writer)
-    // Tulis Header Kolom
-    writer.Write([]string{"Tanggal", "Merchant", "Nominal", "Kategori", "Catatan"})
-    
-    for _, tx := range txs {
-        catName := "Lainnya"
-        if tx.Category != nil { catName = tx.Category.Name }
-        
-        writer.Write([]string{
-            tx.TransactionDate.Format("2006-01-02 15:04"),
-            tx.Merchant,
-            fmt.Sprintf("%.2f", tx.Amount),
-            catName,
-            tx.Note,
-        })
-    }
-    writer.Flush()
+	txs, err := h.txService.GetAllTransactionsForExport(c.Request.Context(), userID, month, year)
+	if err != nil {
+		utils.ErrorResponse(c, "Failed to export data")
+		return
+	}
+
+	c.Header("Content-Disposition", "attachment; filename=transactions.csv")
+	c.Header("Content-Type", "text/csv")
+	c.Header("Transfer-Encoding", "chunked")
+
+	writer := csv.NewWriter(c.Writer)
+	writer.Write([]string{"Tanggal", "Merchant", "Nominal", "Kategori", "Catatan"})
+
+	for _, tx := range txs {
+		catName := "Lainnya"
+		if tx.Category != nil {
+			catName = tx.Category.Name
+		}
+
+		writer.Write([]string{
+			tx.TransactionDate.Format("2006-01-02 15:04"),
+			tx.Merchant,
+			fmt.Sprintf("%.2f", tx.Amount),
+			catName,
+			tx.Note,
+		})
+	}
+	writer.Flush()
 }

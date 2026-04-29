@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net/http"
 	"strconv"
 	"walletx-be/pkg/services"
 	"walletx-be/pkg/utils"
@@ -16,7 +17,7 @@ func NewDashboardHandler(dashboardService services.DashboardService) *DashboardH
 	return &DashboardHandler{dashboardService: dashboardService}
 }
 
-// GetBudgetSummary GET /api/v1/dashboard/budget-summary
+// GetBudgetSummary GET /api/v1/reports/budget-summary
 // Returns each active budget limit merged with actual spending from the VIEW,
 // exposing LimitAmount, SpentAmount, and RemainingBudget per category.
 func (h *DashboardHandler) GetBudgetSummary(c *gin.Context) {
@@ -34,7 +35,7 @@ func (h *DashboardHandler) GetBudgetSummary(c *gin.Context) {
 	utils.SuccessResponse(c, summary, "Budget summary retrieved successfully")
 }
 
-// GetDailyCalendar GET /api/v1/dashboard/calendar
+// GetDailyCalendar GET /api/v1/reports/daily-calendar
 // Returns aggregated daily spending for a specific month and year.
 func (h *DashboardHandler) GetDailyCalendar(c *gin.Context) {
 	userID, ok := parseUserID(c)
@@ -46,19 +47,19 @@ func (h *DashboardHandler) GetDailyCalendar(c *gin.Context) {
 	yearStr := c.Query("year")
 
 	if monthStr == "" || yearStr == "" {
-		utils.ErrorResponse(c, "month and year query parameters are required")
+		utils.FailResponseWithStatus(c, http.StatusBadRequest, "month and year query parameters are required")
 		return
 	}
 
 	month, err := strconv.Atoi(monthStr)
 	if err != nil || month < 1 || month > 12 {
-		utils.ErrorResponse(c, "invalid month parameter")
+		utils.FailResponseWithStatus(c, http.StatusBadRequest, "invalid month parameter")
 		return
 	}
 
 	year, err := strconv.Atoi(yearStr)
 	if err != nil || year < 1900 {
-		utils.ErrorResponse(c, "invalid year parameter")
+		utils.FailResponseWithStatus(c, http.StatusBadRequest, "invalid year parameter")
 		return
 	}
 

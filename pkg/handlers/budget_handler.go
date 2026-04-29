@@ -166,5 +166,5 @@ func (h *BudgetHandler) DeleteBudget(c *gin.Context) {
 		return
 	}
 
-	utils.SuccessResponse(c, nil, "Budget limit deleted successfully")
+	c.Status(http.StatusNoContent)
 }
