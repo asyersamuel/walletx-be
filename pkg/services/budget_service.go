@@ -1,24 +1,29 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"time"
 
-	"gorm.io/gorm"
+	"walletx-be/internal/domain"
+	"walletx-be/internal/domain/dto"
+	"walletx-be/internal/ports"
 	"walletx-be/pkg/models"
 	"walletx-be/pkg/repository"
 
 	"github.com/google/uuid"
 )
 
-// BudgetService defines the business logic contract for category limits
+type CreateBudgetInput = dto.CreateBudgetInput
+type UpdateBudgetInput = dto.UpdateBudgetInput
+
 type BudgetService interface {
-	CreateBudget(userID uuid.UUID, input CreateBudgetInput) (*models.CategoryLimit, error)
-	ListBudgets(userID uuid.UUID) ([]models.CategoryLimit, error)
-	GetBudgetByID(id, userID uuid.UUID) (*models.CategoryLimit, error)
-	GetBudgetProgress(userID uuid.UUID, targetDate time.Time) ([]BudgetProgressItem, error)
-	UpdateBudget(id, userID uuid.UUID, input UpdateBudgetInput) (*models.CategoryLimit, error)
-	DeleteBudget(id, userID uuid.UUID) error
+	CreateBudget(ctx context.Context, userID uuid.UUID, input CreateBudgetInput) (*models.CategoryLimit, error)
+	ListBudgets(ctx context.Context, userID uuid.UUID) ([]models.CategoryLimit, error)
+	GetBudgetByID(ctx context.Context, id, userID uuid.UUID) (*models.CategoryLimit, error)
+	GetBudgetProgress(ctx context.Context, userID uuid.UUID, targetDate time.Time) ([]BudgetProgressItem, error)
+	UpdateBudget(ctx context.Context, id, userID uuid.UUID, input UpdateBudgetInput) (*models.CategoryLimit, error)
+	DeleteBudget(ctx context.Context, id, userID uuid.UUID) error
 }
 
 type BudgetProgressItem struct {
@@ -28,39 +33,27 @@ type BudgetProgressItem struct {
 	SpentAmount  float64   `json:"spent_amount"`
 }
 
-// CreateBudgetInput is the DTO for creating a new category limit
-type CreateBudgetInput struct {
-	CategoryID  uuid.UUID `json:"category_id" binding:"required"`
-	LimitAmount float64   `json:"limit_amount" binding:"required,gt=0"`
-}
-
-// UpdateBudgetInput is the DTO for updating an existing category limit
-type UpdateBudgetInput struct {
-	LimitAmount float64 `json:"limit_amount" binding:"required,gt=0"`
-	IsActive    bool    `json:"is_active"`
-}
-
 type budgetService struct {
 	budgetRepo  repository.BudgetRepository
 	summaryRepo repository.SummaryRepository
-	db          *gorm.DB
+	logger      ports.Logger
 }
 
-func NewBudgetService(budgetRepo repository.BudgetRepository, summaryRepo repository.SummaryRepository, db *gorm.DB) BudgetService {
+func NewBudgetService(budgetRepo repository.BudgetRepository, summaryRepo repository.SummaryRepository, logger ports.Logger) BudgetService {
 	return &budgetService{
 		budgetRepo:  budgetRepo,
 		summaryRepo: summaryRepo,
-		db:          db,
+		logger:      logger,
 	}
 }
 
-func (s *budgetService) CreateBudget(userID uuid.UUID, input CreateBudgetInput) (*models.CategoryLimit, error) {
+func (s *budgetService) CreateBudget(ctx context.Context, userID uuid.UUID, input CreateBudgetInput) (*models.CategoryLimit, error) {
 	if input.LimitAmount <= 0 {
 		return nil, errors.New("limit_amount must be greater than 0")
 	}
 
-	existing, err := s.budgetRepo.FindByCategory(userID, input.CategoryID)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	existing, err := s.budgetRepo.FindByCategory(ctx, userID, input.CategoryID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return nil, err
 	}
 
@@ -72,7 +65,7 @@ func (s *budgetService) CreateBudget(userID uuid.UUID, input CreateBudgetInput) 
 	if existing != nil {
 		existing.LimitAmount = input.LimitAmount
 		existing.IsActive = true
-		if err := s.budgetRepo.Update(existing); err != nil {
+		if err := s.budgetRepo.Update(ctx, existing); err != nil {
 			return nil, err
 		}
 		limit = existing
@@ -83,7 +76,7 @@ func (s *budgetService) CreateBudget(userID uuid.UUID, input CreateBudgetInput) 
 			LimitAmount: input.LimitAmount,
 			IsActive:    true,
 		}
-		if err := s.budgetRepo.Create(limit); err != nil {
+		if err := s.budgetRepo.Create(ctx, limit); err != nil {
 			return nil, err
 		}
 	}
@@ -91,22 +84,20 @@ func (s *budgetService) CreateBudget(userID uuid.UUID, input CreateBudgetInput) 
 	return limit, nil
 }
 
-func (s *budgetService) ListBudgets(userID uuid.UUID) ([]models.CategoryLimit, error) {
-	return s.budgetRepo.List(userID)
+func (s *budgetService) ListBudgets(ctx context.Context, userID uuid.UUID) ([]models.CategoryLimit, error) {
+	return s.budgetRepo.List(ctx, userID)
 }
 
-func (s *budgetService) GetBudgetByID(id, userID uuid.UUID) (*models.CategoryLimit, error) {
-	return s.budgetRepo.GetByID(id, userID)
+func (s *budgetService) GetBudgetByID(ctx context.Context, id, userID uuid.UUID) (*models.CategoryLimit, error) {
+	return s.budgetRepo.GetByID(ctx, id, userID)
 }
 
-func (s *budgetService) GetBudgetProgress(userID uuid.UUID, targetDate time.Time) ([]BudgetProgressItem, error) {
-	// Monthly: 1st of month to last of month
+func (s *budgetService) GetBudgetProgress(ctx context.Context, userID uuid.UUID, targetDate time.Time) ([]BudgetProgressItem, error) {
 	monthStart := time.Date(targetDate.Year(), targetDate.Month(), 1, 0, 0, 0, 0, targetDate.Location())
 	monthEnd := monthStart.AddDate(0, 1, 0).AddDate(0, 0, -1)
 	monthEnd = time.Date(monthEnd.Year(), monthEnd.Month(), monthEnd.Day(), 23, 59, 59, 999999999, monthEnd.Location())
 
-	// Fetch active budgets for user (preloads Category)
-	limits, err := s.budgetRepo.GetActiveByUserID(userID)
+	limits, err := s.budgetRepo.GetActiveByUserID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +106,7 @@ func (s *budgetService) GetBudgetProgress(userID uuid.UUID, targetDate time.Time
 		return []BudgetProgressItem{}, nil
 	}
 
-	monthlySpends, err := s.summaryRepo.GetSpendingByCategoryAndDateRange(userID, monthStart, monthEnd)
+	monthlySpends, err := s.summaryRepo.GetSpendingByCategoryAndDateRange(ctx, userID, monthStart, monthEnd)
 	if err != nil {
 		return nil, err
 	}
@@ -140,12 +131,12 @@ func (s *budgetService) GetBudgetProgress(userID uuid.UUID, targetDate time.Time
 	return results, nil
 }
 
-func (s *budgetService) UpdateBudget(id, userID uuid.UUID, input UpdateBudgetInput) (*models.CategoryLimit, error) {
+func (s *budgetService) UpdateBudget(ctx context.Context, id, userID uuid.UUID, input UpdateBudgetInput) (*models.CategoryLimit, error) {
 	if input.LimitAmount <= 0 {
 		return nil, errors.New("limit_amount must be greater than 0")
 	}
 
-	limit, err := s.budgetRepo.GetByID(id, userID)
+	limit, err := s.budgetRepo.GetByID(ctx, id, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -153,13 +144,13 @@ func (s *budgetService) UpdateBudget(id, userID uuid.UUID, input UpdateBudgetInp
 	limit.LimitAmount = input.LimitAmount
 	limit.IsActive = input.IsActive
 
-	if err := s.budgetRepo.Update(limit); err != nil {
+	if err := s.budgetRepo.Update(ctx, limit); err != nil {
 		return nil, err
 	}
 
 	return limit, nil
 }
 
-func (s *budgetService) DeleteBudget(id, userID uuid.UUID) error {
-	return s.budgetRepo.Delete(id, userID)
+func (s *budgetService) DeleteBudget(ctx context.Context, id, userID uuid.UUID) error {
+	return s.budgetRepo.Delete(ctx, id, userID)
 }

@@ -4,12 +4,12 @@ import (
 	"errors"
 	"net/http"
 
+	"walletx-be/internal/domain"
 	"walletx-be/pkg/services"
 	"walletx-be/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 type RecurringHandler struct {
@@ -20,7 +20,6 @@ func NewRecurringHandler(recurringService services.RecurringService) *RecurringH
 	return &RecurringHandler{recurringService: recurringService}
 }
 
-// CreateRecurring POST /api/v1/recurrings
 func (h *RecurringHandler) CreateRecurring(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -33,7 +32,7 @@ func (h *RecurringHandler) CreateRecurring(c *gin.Context) {
 		return
 	}
 
-	config, err := h.recurringService.CreateRecurring(userID, input)
+	config, err := h.recurringService.CreateRecurring(c.Request.Context(), userID, input)
 	if err != nil {
 		utils.FailResponseWithStatus(c, http.StatusBadRequest, err.Error())
 		return
@@ -42,14 +41,13 @@ func (h *RecurringHandler) CreateRecurring(c *gin.Context) {
 	utils.SuccessResponseWithStatus(c, http.StatusCreated, config, "Recurring config created successfully")
 }
 
-// ListRecurrings GET /api/v1/recurrings
 func (h *RecurringHandler) ListRecurrings(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
 		return
 	}
 
-	configs, err := h.recurringService.ListRecurrings(userID)
+	configs, err := h.recurringService.ListRecurrings(c.Request.Context(), userID)
 	if err != nil {
 		utils.ErrorResponse(c, "Failed to retrieve recurring configs")
 		return
@@ -58,7 +56,6 @@ func (h *RecurringHandler) ListRecurrings(c *gin.Context) {
 	utils.SuccessResponse(c, configs, "Recurring configs retrieved successfully")
 }
 
-// GetRecurringByID GET /api/v1/recurrings/:id
 func (h *RecurringHandler) GetRecurringByID(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -71,9 +68,9 @@ func (h *RecurringHandler) GetRecurringByID(c *gin.Context) {
 		return
 	}
 
-	config, err := h.recurringService.GetRecurringByID(id, userID)
+	config, err := h.recurringService.GetRecurringByID(c.Request.Context(), id, userID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Recurring config not found")
 			return
 		}
@@ -84,7 +81,6 @@ func (h *RecurringHandler) GetRecurringByID(c *gin.Context) {
 	utils.SuccessResponse(c, config, "Recurring config retrieved successfully")
 }
 
-// UpdateRecurring PUT /api/v1/recurrings/:id
 func (h *RecurringHandler) UpdateRecurring(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -103,9 +99,9 @@ func (h *RecurringHandler) UpdateRecurring(c *gin.Context) {
 		return
 	}
 
-	config, err := h.recurringService.UpdateRecurring(id, userID, input)
+	config, err := h.recurringService.UpdateRecurring(c.Request.Context(), id, userID, input)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Recurring config not found")
 			return
 		}
@@ -116,7 +112,6 @@ func (h *RecurringHandler) UpdateRecurring(c *gin.Context) {
 	utils.SuccessResponse(c, config, "Recurring config updated successfully")
 }
 
-// DeleteRecurring DELETE /api/v1/recurrings/:id
 func (h *RecurringHandler) DeleteRecurring(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -129,8 +124,8 @@ func (h *RecurringHandler) DeleteRecurring(c *gin.Context) {
 		return
 	}
 
-	if err := h.recurringService.DeleteRecurring(id, userID); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := h.recurringService.DeleteRecurring(c.Request.Context(), id, userID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Recurring config not found")
 			return
 		}
@@ -140,4 +135,3 @@ func (h *RecurringHandler) DeleteRecurring(c *gin.Context) {
 
 	c.Status(http.StatusNoContent)
 }
-

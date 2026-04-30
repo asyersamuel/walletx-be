@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"walletx-be/internal/domain"
 	"walletx-be/pkg/services"
 	"walletx-be/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 type BudgetHandler struct {
@@ -21,7 +21,6 @@ func NewBudgetHandler(budgetService services.BudgetService) *BudgetHandler {
 	return &BudgetHandler{budgetService: budgetService}
 }
 
-// CreateBudget POST /api/v1/budgets
 func (h *BudgetHandler) CreateBudget(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -34,8 +33,12 @@ func (h *BudgetHandler) CreateBudget(c *gin.Context) {
 		return
 	}
 
-	limit, err := h.budgetService.CreateBudget(userID, input)
+	limit, err := h.budgetService.CreateBudget(c.Request.Context(), userID, input)
 	if err != nil {
+		if errors.Is(err, domain.ErrDuplicate) {
+			utils.FailResponseWithStatus(c, http.StatusConflict, "Budget already exists for this category")
+			return
+		}
 		utils.FailResponseWithStatus(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -43,14 +46,13 @@ func (h *BudgetHandler) CreateBudget(c *gin.Context) {
 	utils.SuccessResponseWithStatus(c, http.StatusCreated, limit, "Budget limit created successfully")
 }
 
-// ListBudgets GET /api/v1/budgets
 func (h *BudgetHandler) ListBudgets(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
 		return
 	}
 
-	limits, err := h.budgetService.ListBudgets(userID)
+	limits, err := h.budgetService.ListBudgets(c.Request.Context(), userID)
 	if err != nil {
 		utils.ErrorResponse(c, "Failed to retrieve budget limits")
 		return
@@ -59,7 +61,6 @@ func (h *BudgetHandler) ListBudgets(c *gin.Context) {
 	utils.SuccessResponse(c, limits, "Budget limits retrieved successfully")
 }
 
-// GetBudgetProgress GET /api/v1/budgets/progress
 func (h *BudgetHandler) GetBudgetProgress(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -77,7 +78,7 @@ func (h *BudgetHandler) GetBudgetProgress(c *gin.Context) {
 		targetDate = parsed
 	}
 
-	progress, err := h.budgetService.GetBudgetProgress(userID, targetDate)
+	progress, err := h.budgetService.GetBudgetProgress(c.Request.Context(), userID, targetDate)
 	if err != nil {
 		utils.ErrorResponse(c, "Failed to retrieve budget progress")
 		return
@@ -86,7 +87,6 @@ func (h *BudgetHandler) GetBudgetProgress(c *gin.Context) {
 	utils.SuccessResponse(c, progress, "Budget progress retrieved successfully")
 }
 
-// GetBudgetByID GET /api/v1/budgets/:id
 func (h *BudgetHandler) GetBudgetByID(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -99,9 +99,9 @@ func (h *BudgetHandler) GetBudgetByID(c *gin.Context) {
 		return
 	}
 
-	limit, err := h.budgetService.GetBudgetByID(id, userID)
+	limit, err := h.budgetService.GetBudgetByID(c.Request.Context(), id, userID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Budget limit not found")
 			return
 		}
@@ -112,7 +112,6 @@ func (h *BudgetHandler) GetBudgetByID(c *gin.Context) {
 	utils.SuccessResponse(c, limit, "Budget limit retrieved successfully")
 }
 
-// UpdateBudget PUT /api/v1/budgets/:id
 func (h *BudgetHandler) UpdateBudget(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -131,9 +130,9 @@ func (h *BudgetHandler) UpdateBudget(c *gin.Context) {
 		return
 	}
 
-	limit, err := h.budgetService.UpdateBudget(id, userID, input)
+	limit, err := h.budgetService.UpdateBudget(c.Request.Context(), id, userID, input)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Budget limit not found")
 			return
 		}
@@ -144,7 +143,6 @@ func (h *BudgetHandler) UpdateBudget(c *gin.Context) {
 	utils.SuccessResponse(c, limit, "Budget limit updated successfully")
 }
 
-// DeleteBudget DELETE /api/v1/budgets/:id
 func (h *BudgetHandler) DeleteBudget(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -157,8 +155,8 @@ func (h *BudgetHandler) DeleteBudget(c *gin.Context) {
 		return
 	}
 
-	if err := h.budgetService.DeleteBudget(id, userID); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := h.budgetService.DeleteBudget(c.Request.Context(), id, userID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Budget limit not found")
 			return
 		}

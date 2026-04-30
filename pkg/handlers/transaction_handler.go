@@ -8,12 +8,12 @@ import (
 	"strconv"
 	"strings"
 
+	"walletx-be/internal/domain"
 	"walletx-be/pkg/services"
 	"walletx-be/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 type TransactionHandler struct {
@@ -26,17 +26,6 @@ func NewTransactionHandler(txService services.TransactionService) *TransactionHa
 	}
 }
 
-// GetUserTransactions handles GET /api/v1/transactions
-// RESTful API endpoint with full filtering, sorting, and pagination support
-//
-// Query Parameters:
-// - Pagination: limit (default: 50, max: 100), offset (default: 0)
-// - Date Filter: date (exact), date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)
-// - Amount Filter: amount_min, amount_max
-// - Search: q (searches merchant name)
-// - Sorting: sort=field:direction (e.g., transaction_date:desc, amount:asc)
-// - Delta Sync: last_updated_at (ISO 8601 timestamp)
-// - CSV Export: Accept header = text/csv
 func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -51,25 +40,21 @@ func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
 		return
 	}
 
-	// Parse pagination
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
-	// Parse filters
 	filters := services.TransactionFilters{
-		DateFrom:     c.Query("date_from"),
-		DateTo:       c.Query("date_to"),
-		LastUpdated:  c.Query("last_updated_at"),
+		DateFrom:       c.Query("date_from"),
+		DateTo:         c.Query("date_to"),
+		LastUpdated:    c.Query("last_updated_at"),
 		ExcludeDeleted: true,
 	}
 
-	// Support legacy single date filter
 	if dateFilter := c.Query("date"); dateFilter != "" {
 		filters.DateFrom = dateFilter
 		filters.DateTo = dateFilter
 	}
 
-	// Parse amount range filters
 	if amountMinStr := c.Query("amount_min"); amountMinStr != "" {
 		if amountMin, err := strconv.ParseFloat(amountMinStr, 64); err == nil {
 			filters.AmountMin = &amountMin
@@ -81,7 +66,6 @@ func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
 		}
 	}
 
-	// Parse sorting
 	sort := services.SortOption{
 		Field:     "transaction_date",
 		Direction: "DESC",
@@ -94,7 +78,6 @@ func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
 		}
 	}
 
-	// Handle search query
 	searchQuery := c.Query("q")
 
 	var transactions interface{}
@@ -102,7 +85,6 @@ func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
 	var err error
 
 	if searchQuery != "" {
-		// Search mode: search by merchant name
 		results, err := h.txService.SearchTransactions(c.Request.Context(), userID, searchQuery, limit, offset)
 		if err != nil {
 			utils.ErrorResponse(c, "Failed to search transactions")
@@ -112,7 +94,6 @@ func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
 		transactions = results
 		totalCount = count
 	} else {
-		// List mode: with filters and sorting
 		transactions, totalCount, err = h.txService.GetUserTransactionsWithCount(c.Request.Context(), userID, limit, offset, filters, sort)
 		if err != nil {
 			utils.ErrorResponse(c, "Failed to retrieve transactions")
@@ -124,7 +105,6 @@ func (h *TransactionHandler) GetUserTransactions(c *gin.Context) {
 	utils.SuccessResponseWithPagination(c, transactions, "Transactions retrieved successfully", pagination)
 }
 
-// CreateTransaction handles POST /api/v1/transactions — manual transaction creation
 func (h *TransactionHandler) CreateTransaction(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -139,6 +119,10 @@ func (h *TransactionHandler) CreateTransaction(c *gin.Context) {
 
 	transaction, err := h.txService.CreateManualTransaction(c.Request.Context(), userID, input)
 	if err != nil {
+		if errors.Is(err, domain.ErrDuplicate) {
+			utils.FailResponseWithStatus(c, http.StatusConflict, "Transaction already exists")
+			return
+		}
 		utils.FailResponseWithStatus(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -146,8 +130,6 @@ func (h *TransactionHandler) CreateTransaction(c *gin.Context) {
 	utils.SuccessResponseWithStatus(c, http.StatusCreated, transaction, "Transaction created successfully")
 }
 
-// UpdateTransaction handles PUT /api/v1/transactions/:id
-// Supports partial updates - only provided fields will be updated
 func (h *TransactionHandler) UpdateTransaction(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -169,11 +151,11 @@ func (h *TransactionHandler) UpdateTransaction(c *gin.Context) {
 
 	transaction, err := h.txService.UpdateTransaction(c.Request.Context(), userID, txID, input)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Transaction not found")
 			return
 		}
-		if err.Error() == "unauthorized to update this transaction" {
+		if errors.Is(err, domain.ErrUnauthorized) {
 			utils.ForbiddenResponse(c, "You are not authorized to access this transaction")
 			return
 		}
@@ -184,7 +166,6 @@ func (h *TransactionHandler) UpdateTransaction(c *gin.Context) {
 	utils.SuccessResponse(c, transaction, "Transaction updated successfully")
 }
 
-// DeleteTransaction handles DELETE /api/v1/transactions/:id
 func (h *TransactionHandler) DeleteTransaction(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -200,11 +181,11 @@ func (h *TransactionHandler) DeleteTransaction(c *gin.Context) {
 
 	err = h.txService.DeleteTransaction(c.Request.Context(), userID, txID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Transaction not found")
 			return
 		}
-		if err.Error() == "unauthorized to delete this transaction" {
+		if errors.Is(err, domain.ErrUnauthorized) {
 			utils.ForbiddenResponse(c, "You are not authorized to access this transaction")
 			return
 		}
@@ -215,9 +196,6 @@ func (h *TransactionHandler) DeleteTransaction(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// GetReports handles GET /api/v1/reports/expenses
-// RESTful reporting endpoint with grouping support
-// Query Parameters: month, year, group_by (default: category)
 func (h *TransactionHandler) GetReports(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -241,7 +219,6 @@ func (h *TransactionHandler) GetReports(c *gin.Context) {
 	utils.SuccessResponse(c, reports, "Reports retrieved")
 }
 
-// exportCSV handles CSV export via content negotiation
 func (h *TransactionHandler) exportCSV(c *gin.Context, userID uuid.UUID) {
 	monthStr := c.Query("month")
 	yearStr := c.Query("year")

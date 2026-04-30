@@ -13,13 +13,23 @@ type Config struct {
 	App      AppConfig
 	Media    MediaConfig
 	IMAP     IMAPConfig
+	Gemini   GeminiConfig
 	OAuth    OAuthConfig
+	Cron     CronConfig
 }
 
 type IMAPConfig struct {
     Email    string
     Password string
     Server   string
+}
+
+type GeminiConfig struct {
+	APIKey string
+}
+
+type CronConfig struct {
+	Secret string
 }
 
 type OAuthConfig struct {
@@ -115,10 +125,16 @@ func Load() *Config {
             Password: getEnv("IMAP_PASSWORD", ""), 
             Server:   getEnv("IMAP_SERVER", "imap.gmail.com:993"),
         },
+		Gemini: GeminiConfig{
+			APIKey: getEnv("GEMINI_API_KEY", ""),
+		},
 		OAuth: OAuthConfig{
 			ClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 			ClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 			RedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:8080/api/v1/auth/google/callback"),
+		},
+		Cron: CronConfig{
+			Secret: getEnv("CRON_SECRET", ""),
 		},
 	}
 }

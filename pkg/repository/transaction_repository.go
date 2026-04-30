@@ -1,252 +1,207 @@
 package repository
 
 import (
+	"context"
+	"errors"
+	"time"
+
+	"walletx-be/internal/domain"
+	"walletx-be/internal/domain/query"
+	"walletx-be/internal/domain/report"
+	"walletx-be/internal/ports"
 	"walletx-be/pkg/models"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
-// TransactionRepository mendefinisikan kontrak fungsi untuk entitas Transaction
-// RESTful API compliant - supports filtering, sorting, and pagination
+type TransactionFilters = query.TransactionFilters
+type SortOption = query.SortOption
+
 type TransactionRepository interface {
-	Create(transaction *models.Transaction) error
-	GetByID(id uuid.UUID) (*models.Transaction, error)
-	Update(transaction *models.Transaction) error
-	Delete(id uuid.UUID) error
-	ListByUserID(userID uuid.UUID, limit, offset int, filters TransactionFilters, sort SortOption) ([]models.Transaction, error)
-	CountByUserID(userID uuid.UUID, filters TransactionFilters) (int64, error)
-	SearchByMerchant(userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error)
-	CountSearchByMerchant(userID uuid.UUID, query string) (int64, error)
-	GetExpensesByCategory(userID uuid.UUID, month, year int) ([]map[string]interface{}, error)
-	GetForExport(userID uuid.UUID, month, year int) ([]models.Transaction, error)
-}
-
-// TransactionFilters holds filtering options for transaction queries
-type TransactionFilters struct {
-	DateFrom      string  // YYYY-MM-DD format
-	DateTo        string  // YYYY-MM-DD format
-	AmountMin     *float64
-	AmountMax     *float64
-	LastUpdated   string  // For delta sync
-	ExcludeDeleted bool   // Whether to exclude soft-deleted records
-}
-
-// SortOption holds sorting configuration
-type SortOption struct {
-	Field     string // Field to sort by (transaction_date, amount, created_at, etc.)
-	Direction string // "asc" or "desc"
+	Create(ctx context.Context, transaction *models.Transaction) error
+	GetByID(ctx context.Context, id uuid.UUID) (*models.Transaction, error)
+	GetByMessageID(ctx context.Context, messageID string) (*models.Transaction, error)
+	Update(ctx context.Context, transaction *models.Transaction) error
+	Delete(ctx context.Context, id uuid.UUID) error
+	ListByUserID(ctx context.Context, userID uuid.UUID, limit, offset int, filters TransactionFilters, sort SortOption) ([]models.Transaction, error)
+	CountByUserID(ctx context.Context, userID uuid.UUID, filters TransactionFilters) (int64, error)
+	SearchByMerchant(ctx context.Context, userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error)
+	CountSearchByMerchant(ctx context.Context, userID uuid.UUID, query string) (int64, error)
+	GetExpensesByCategory(ctx context.Context, userID uuid.UUID, month, year int) ([]report.CategoryExpense, error)
+	GetForExport(ctx context.Context, userID uuid.UUID, month, year int) ([]models.Transaction, error)
 }
 
 type transactionRepository struct {
-	db *gorm.DB
+	db     *gorm.DB
+	logger ports.Logger
 }
 
-// NewTransactionRepository adalah constructor untuk membuat instance TransactionRepository
-func NewTransactionRepository(db *gorm.DB) TransactionRepository {
-	return &transactionRepository{db: db}
+func NewTransactionRepository(db *gorm.DB, logger ports.Logger) TransactionRepository {
+	return &transactionRepository{
+		db:     db,
+		logger: logger,
+	}
 }
 
-// Create: Akan dipanggil oleh Service setelah berhasil membedah isi email
-func (r *transactionRepository) Create(transaction *models.Transaction) error {
-	return r.db.Create(transaction).Error
+func (r *transactionRepository) Create(ctx context.Context, transaction *models.Transaction) error {
+	err := r.db.WithContext(ctx).Create(transaction).Error
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return domain.ErrDuplicate
+	}
+	return err
 }
 
-func (r *transactionRepository) GetByID(id uuid.UUID) (*models.Transaction, error) {
+func (r *transactionRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Transaction, error) {
 	var transaction models.Transaction
-	if err := r.db.First(&transaction, "id = ?", id).Error; err != nil {
+	if err := r.db.WithContext(ctx).First(&transaction, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
 		return nil, err
 	}
 	return &transaction, nil
 }
 
-// ListByUserID: Mengambil daftar transaksi milik 1 user dengan pagination, filtering, dan sorting
-// RESTful compliant - supports:
-// - Date range: filters.DateFrom, filters.DateTo (YYYY-MM-DD)
-// - Amount range: filters.AmountMin, filters.AmountMax
-// - Delta sync: filters.LastUpdated (ISO 8601 timestamp)
-// - Custom sorting: sort.Field (transaction_date, amount, created_at, etc.) + sort.Direction (ASC/DESC)
-// - Default sort: transaction_date DESC
-// - SQL injection protection via whitelist validation
-func (r *transactionRepository) ListByUserID(userID uuid.UUID, limit, offset int, filters TransactionFilters, sort SortOption) ([]models.Transaction, error) {
-    var items []models.Transaction
-    
-    q := r.db.Where("user_id = ?", userID)
-    
-    // Date range filtering
-    if filters.DateFrom != "" {
-        q = q.Where("DATE(transaction_date) >= ?", filters.DateFrom)
-    }
-    if filters.DateTo != "" {
-        q = q.Where("DATE(transaction_date) <= ?", filters.DateTo)
-    }
-    
-    // Amount range filtering
-    if filters.AmountMin != nil {
-        q = q.Where("amount >= ?", *filters.AmountMin)
-    }
-    if filters.AmountMax != nil {
-        q = q.Where("amount <= ?", *filters.AmountMax)
-    }
-    
-    // Delta sync logic
-    if filters.LastUpdated != "" {
-        q = q.Unscoped().Where("updated_at >= ? OR deleted_at >= ?", filters.LastUpdated, filters.LastUpdated)
-    } else {
-        // Exclude soft-deleted on first load
-        if filters.ExcludeDeleted {
-            q = q.Where("deleted_at IS NULL")
-        }
-    }
-    
-    // Apply sorting
-    sortField := sort.Field
-    if sortField == "" {
-        sortField = "transaction_date"
-    }
-    
-    sortDirection := sort.Direction
-    if sortDirection == "" {
-        sortDirection = "DESC"
-    }
-    
-    // Validate sort field to prevent SQL injection
-    validFields := map[string]bool{
-        "transaction_date": true,
-        "amount":           true,
-        "created_at":       true,
-        "updated_at":       true,
-        "merchant":         true,
-    }
-    
-    if !validFields[sortField] {
-        sortField = "transaction_date"
-    }
-    
-    if sortDirection != "ASC" && sortDirection != "DESC" {
-        sortDirection = "DESC"
-    }
-    
-    q = q.Order(sortField + " " + sortDirection)
-    
-    // Apply pagination
-    if limit > 0 {
-        q = q.Limit(limit)
-    }
-    if offset > 0 {
-        q = q.Offset(offset)
-    }
-    
-    if err := q.Find(&items).Error; err != nil {
-        return nil, err
-    }
-    return items, nil
+func (r *transactionRepository) GetByMessageID(ctx context.Context, messageID string) (*models.Transaction, error) {
+	if messageID == "" {
+		return nil, nil
+	}
+	var transaction models.Transaction
+	if err := r.db.WithContext(ctx).Where("message_id = ?", messageID).First(&transaction).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &transaction, nil
 }
 
-// CountByUserID: Menghitung total transaksi milik user untuk pagination metadata
-func (r *transactionRepository) CountByUserID(userID uuid.UUID, filters TransactionFilters) (int64, error) {
-    var count int64
-    
-    q := r.db.Model(&models.Transaction{}).Where("user_id = ?", userID)
-    
-    // Date range filtering
-    if filters.DateFrom != "" {
-        q = q.Where("DATE(transaction_date) >= ?", filters.DateFrom)
-    }
-    if filters.DateTo != "" {
-        q = q.Where("DATE(transaction_date) <= ?", filters.DateTo)
-    }
-    
-    // Amount range filtering
-    if filters.AmountMin != nil {
-        q = q.Where("amount >= ?", *filters.AmountMin)
-    }
-    if filters.AmountMax != nil {
-        q = q.Where("amount <= ?", *filters.AmountMax)
-    }
-    
-    // Delta sync / soft-delete handling
-    if filters.LastUpdated != "" {
-        q = q.Unscoped().Where("updated_at >= ? OR deleted_at >= ?", filters.LastUpdated, filters.LastUpdated)
-    } else {
-        if filters.ExcludeDeleted {
-            q = q.Where("deleted_at IS NULL")
-        }
-    }
-    
-    if err := q.Count(&count).Error; err != nil {
-        return 0, err
-    }
-    return count, nil
+func (r *transactionRepository) ListByUserID(ctx context.Context, userID uuid.UUID, limit, offset int, filters TransactionFilters, sort SortOption) ([]models.Transaction, error) {
+	var items []models.Transaction
+	
+	q := r.db.WithContext(ctx).Where("user_id = ?", userID)
+	
+	if filters.DateFrom != "" {
+		q = q.Where("DATE(transaction_date) >= ?", filters.DateFrom)
+	}
+	if filters.DateTo != "" {
+		q = q.Where("DATE(transaction_date) <= ?", filters.DateTo)
+	}
+	if filters.AmountMin != nil {
+		q = q.Where("amount >= ?", *filters.AmountMin)
+	}
+	if filters.AmountMax != nil {
+		q = q.Where("amount <= ?", *filters.AmountMax)
+	}
+	if filters.LastUpdated != "" {
+		q = q.Where("updated_at > ?", filters.LastUpdated)
+	}
+	if filters.ExcludeDeleted {
+		q = q.Where("deleted_at IS NULL")
+	}
+
+	sortField := sort.Field
+	if sortField == "" {
+		sortField = "transaction_date"
+	}
+	sortDir := sort.Direction
+	if sortDir == "" {
+		sortDir = "DESC"
+	}
+
+	if err := q.Order(sortField + " " + sortDir).Limit(limit).Offset(offset).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-// Pencarian Transaksi
-func (r *transactionRepository) SearchByMerchant(userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error) {
-    var items []models.Transaction
-    // ILIKE untuk case-insensitive di PostgreSQL
-    q := r.db.Where("user_id = ? AND merchant ILIKE ?", userID, "%"+query+"%").
-              Order("transaction_date DESC")
-    
-    if limit > 0 { q = q.Limit(limit) }
-    if offset > 0 { q = q.Offset(offset) }
-    
-    if err := q.Find(&items).Error; err != nil { return nil, err }
-    return items, nil
+func (r *transactionRepository) CountByUserID(ctx context.Context, userID uuid.UUID, filters TransactionFilters) (int64, error) {
+	var count int64
+	q := r.db.WithContext(ctx).Model(&models.Transaction{}).Where("user_id = ?", userID)
+
+	if filters.DateFrom != "" {
+		q = q.Where("DATE(transaction_date) >= ?", filters.DateFrom)
+	}
+	if filters.DateTo != "" {
+		q = q.Where("DATE(transaction_date) <= ?", filters.DateTo)
+	}
+	if filters.AmountMin != nil {
+		q = q.Where("amount >= ?", *filters.AmountMin)
+	}
+	if filters.AmountMax != nil {
+		q = q.Where("amount <= ?", *filters.AmountMax)
+	}
+	if filters.LastUpdated != "" {
+		q = q.Where("updated_at > ?", filters.LastUpdated)
+	}
+	if filters.ExcludeDeleted {
+		q = q.Where("deleted_at IS NULL")
+	}
+
+	if err := q.Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
-// CountSearchByMerchant: Menghitung hasil pencarian untuk pagination
-func (r *transactionRepository) CountSearchByMerchant(userID uuid.UUID, query string) (int64, error) {
-    var count int64
-    q := r.db.Model(&models.Transaction{}).Where("user_id = ? AND merchant ILIKE ?", userID, "%"+query+"%")
-    
-    if err := q.Count(&count).Error; err != nil {
-        return 0, err
-    }
-    return count, nil
+func (r *transactionRepository) SearchByMerchant(ctx context.Context, userID uuid.UUID, query string, limit, offset int) ([]models.Transaction, error) {
+	var items []models.Transaction
+	if err := r.db.WithContext(ctx).Where("user_id = ? AND merchant ILIKE ?", userID, "%"+query+"%").
+		Order("transaction_date DESC").Limit(limit).Offset(offset).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-// Analitik Laporan
-func (r *transactionRepository) GetExpensesByCategory(userID uuid.UUID, month, year int) ([]map[string]interface{}, error) {
-    var results []map[string]interface{}
-    // Raw SQL untuk grouping
-    query := `
-        SELECT COALESCE(c.name, 'Lainnya') as category_name, SUM(t.amount) as total_amount
-        FROM transactions t
-        LEFT JOIN categories c ON t.category_id = c.id
-        WHERE t.user_id = ? 
-          AND EXTRACT(MONTH FROM t.transaction_date) = ? 
-          AND EXTRACT(YEAR FROM t.transaction_date) = ?
-          AND t.deleted_at IS NULL
-        GROUP BY c.name
-        ORDER BY total_amount DESC
-    `
-    if err := r.db.Raw(query, userID, month, year).Scan(&results).Error; err != nil {
-        return nil, err
-    }
-    return results, nil
+func (r *transactionRepository) CountSearchByMerchant(ctx context.Context, userID uuid.UUID, query string) (int64, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).Model(&models.Transaction{}).Where("user_id = ? AND merchant ILIKE ?", userID, "%"+query+"%").Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
-func (r *transactionRepository) GetForExport(userID uuid.UUID, month, year int) ([]models.Transaction, error) {
-    var items []models.Transaction
-    
-    // Ambil semua transaksi di bulan dan tahun yang diminta (abaikan yang sudah dihapus)
-    q := r.db.Preload("Category"). // Preload agar nama kategori ikut terambil untuk CSV
-        Where("user_id = ?", userID).
-        Where("EXTRACT(MONTH FROM transaction_date) = ?", month).
-        Where("EXTRACT(YEAR FROM transaction_date) = ?", year).
-        Where("deleted_at IS NULL"). // Jangan ikutkan data yang sudah di-soft delete
-        Order("transaction_date ASC") // Urutkan dari tanggal terlama ke terbaru
-        
-    if err := q.Find(&items).Error; err != nil {
-        return nil, err
-    }
-    return items, nil
+func (r *transactionRepository) GetExpensesByCategory(ctx context.Context, userID uuid.UUID, month, year int) ([]report.CategoryExpense, error) {
+	var results []report.CategoryExpense
+	startDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
+	endDate := startDate.AddDate(0, 1, 0)
+
+	query := `
+		SELECT
+			c.name AS category_name,
+			SUM(t.amount) AS total_amount
+		FROM transactions t
+		LEFT JOIN categories c ON t.category_id = c.id
+		WHERE t.user_id = ?
+		  AND t.transaction_date >= ?
+		  AND t.transaction_date < ?
+		GROUP BY c.name
+		ORDER BY total_amount DESC
+	`
+
+	if err := r.db.WithContext(ctx).Raw(query, userID, startDate, endDate).Scan(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
-func (r *transactionRepository) Update(transaction *models.Transaction) error {
-	return r.db.Save(transaction).Error
+func (r *transactionRepository) GetForExport(ctx context.Context, userID uuid.UUID, month, year int) ([]models.Transaction, error) {
+	var items []models.Transaction
+	startDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
+	endDate := startDate.AddDate(0, 1, 0)
+
+	if err := r.db.WithContext(ctx).Where("user_id = ? AND transaction_date >= ? AND transaction_date < ?", userID, startDate, endDate).
+		Preload("Category").Order("transaction_date ASC").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-func (r *transactionRepository) Delete(id uuid.UUID) error {
-	return r.db.Delete(&models.Transaction{}, "id = ?", id).Error
-}	
+func (r *transactionRepository) Update(ctx context.Context, transaction *models.Transaction) error {
+	return r.db.WithContext(ctx).Save(transaction).Error
+}
+
+func (r *transactionRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Delete(&models.Transaction{}, "id = ?", id).Error
+}
