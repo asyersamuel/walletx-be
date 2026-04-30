@@ -15,6 +15,7 @@ type User struct {
 	Email    string    `gorm:"uniqueIndex;not null" json:"email"` // Used for matching bank emails
 	Name     string    `gorm:"not null" json:"name"`
 	Picture  string    `json:"picture"`
+	TelegramChatID *string `gorm:"uniqueIndex" json:"telegram_chat_id"`
 
 	// Standard GORM timestamps
 	CreatedAt time.Time      `json:"created_at"`

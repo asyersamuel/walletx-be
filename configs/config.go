@@ -14,6 +14,11 @@ type Config struct {
 	Media    MediaConfig
 	IMAP     IMAPConfig
 	OAuth    OAuthConfig
+	Telegram TelegramConfig
+}
+
+type TelegramConfig struct {
+	BotToken string
 }
 
 type IMAPConfig struct {
@@ -57,6 +62,7 @@ type JWTConfig struct {
 
 type AppConfig struct {
 	DevMode bool // Development mode flag
+	URL     string // Frontend or API Base URL, e.g. https://walletx-be.vercel.app
 }
 
 type MediaConfig struct {
@@ -99,6 +105,7 @@ func Load() *Config {
 		},
 		App: AppConfig{
 			DevMode: getEnvAsBool("DEV_MODE", false),
+			URL:     getEnv("APP_URL", "http://localhost:8443"),
 		},
 		Media: MediaConfig{
 			StorageType:        getEnv("STORAGE_TYPE", "local"), // Default to local storage
@@ -119,6 +126,9 @@ func Load() *Config {
 			ClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 			ClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 			RedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:8080/api/v1/auth/google/callback"),
+		},
+		Telegram: TelegramConfig{
+			BotToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
 		},
 	}
 }

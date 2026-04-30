@@ -37,6 +37,7 @@ func SetupRouter(
 	recurringHandler  *handlers.RecurringHandler,
 	dashboardHandler  *handlers.DashboardHandler,
 	cronHandler       *handlers.CronHandler,
+	telegramHandler   *handlers.TelegramHandler,
 	jwtSecret         string,
 	cfg               *config.Config,
 	db                *gorm.DB,
@@ -76,6 +77,13 @@ func SetupRouter(
 				auth.GET("/google/test-login", authHandler.GoogleLoginTest)
 				auth.GET("/google/callback", authHandler.GoogleCallbackTest)
 			}
+		}
+
+		// ── Telegram Routes (public) ─────────────────────────────────────────
+		telegramGroup := api.Group("/telegram")
+		{
+			telegramGroup.POST("/webhook", telegramHandler.HandleWebhook)
+			telegramGroup.GET("/verify", telegramHandler.VerifyToken)
 		}
 
 		// ── Protected Routes (require valid JWT) ─────────────────────────────

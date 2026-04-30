@@ -10,6 +10,7 @@ import (
 	"walletx-be/pkg/repository"
 	"walletx-be/pkg/router"
 	"walletx-be/pkg/services"
+	"walletx-be/pkg/utils"
 
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
@@ -64,6 +65,8 @@ func main() {
 		cacheRepo = repository.NewNoOpCacheRepository()
 	}
 
+	emailSvc := utils.NewEmailService(cfg.IMAP)
+
 	// 5. Initialize Services
 	authService      := services.NewAuthService(userRepo, cfg, blacklistRepo)
 	parserService    := services.NewParserService()
@@ -72,6 +75,7 @@ func main() {
 	budgetService    := services.NewBudgetService(budgetRepo, summaryRepo, db)
 	recurringService := services.NewRecurringService(recurringRepo, transactionRepo, cacheRepo)
 	dashboardService := services.NewDashboardService(budgetRepo, summaryRepo, cacheRepo)
+	telegramService  := services.NewTelegramService(cfg, redisClient, userRepo, emailSvc)
 
 	// 5. Initialize Handlers
 	authHandler      := handlers.NewAuthHandler(authService, cfg)
@@ -80,6 +84,7 @@ func main() {
 	budgetHandler    := handlers.NewBudgetHandler(budgetService)
 	recurringHandler := handlers.NewRecurringHandler(recurringService)
 	dashboardHandler := handlers.NewDashboardHandler(dashboardService)
+	telegramHandler  := handlers.NewTelegramHandler(telegramService)
 
 	// 6. Initialize Services for HTTP-triggered Cron tasks
 	imapService := services.NewIMAPService(cfg.IMAP.Email, cfg.IMAP.Password, txService)
@@ -95,6 +100,7 @@ func main() {
 		recurringHandler,
 		dashboardHandler,
 		cronHandler,
+		telegramHandler,
 		cfg.JWT.Secret,
 		cfg,
 		db,
