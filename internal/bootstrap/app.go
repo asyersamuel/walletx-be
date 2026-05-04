@@ -113,7 +113,7 @@ func BuildApp(cfg *configs.Config) (*App, error) {
 		return nil, fmt.Errorf("redis client is required for telegram service")
 	}
 
-	telegramService := services.NewTelegramService(cfg, bot, redisClient, userRepo, categoryRepo, transactionRepo, emailSvc)
+	telegramService := services.NewTelegramService(cfg, bot, redisClient, userRepo, categoryRepo, transactionRepo, budgetRepo, emailSvc)
 	telegramHandler := handlers.NewTelegramHandler(telegramService)
 
 	r := router.SetupRouter(

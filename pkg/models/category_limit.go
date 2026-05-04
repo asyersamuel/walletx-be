@@ -13,6 +13,7 @@ type CategoryLimit struct {
 	UserID      uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:idx_user_category" json:"user_id"`
 	CategoryID  uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:idx_user_category" json:"category_id"`
 	LimitAmount float64   `gorm:"type:numeric(15,2);not null" binding:"required,gt=0" json:"limit_amount"`
+	Period      string    `gorm:"type:text;not null;default:'monthly'" json:"period"`
 
 	IsActive bool `gorm:"default:true"    json:"is_active"`
 

@@ -30,6 +30,7 @@ type TransactionRepository interface {
 	CountSearchByMerchant(ctx context.Context, userID uuid.UUID, query string) (int64, error)
 	GetExpensesByCategory(ctx context.Context, userID uuid.UUID, month, year int) ([]report.CategoryExpense, error)
 	GetForExport(ctx context.Context, userID uuid.UUID, month, year int) ([]models.Transaction, error)
+	GetTotalSpentByCategoryThisMonth(ctx context.Context, userID uuid.UUID, categoryID uuid.UUID, month, year int) (float64, error)
 }
 
 type transactionRepository struct {
@@ -204,4 +205,21 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *models.
 
 func (r *transactionRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.Transaction{}, "id = ?", id).Error
+}
+
+func (r *transactionRepository) GetTotalSpentByCategoryThisMonth(ctx context.Context, userID uuid.UUID, categoryID uuid.UUID, month, year int) (float64, error) {
+	var total float64
+	startDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
+	endDate := startDate.AddDate(0, 1, 0)
+
+	err := r.db.WithContext(ctx).
+		Model(&models.Transaction{}).
+		Where("user_id = ? AND category_id = ? AND transaction_date >= ? AND transaction_date < ?", userID, categoryID, startDate, endDate).
+		Select("COALESCE(SUM(amount), 0)").
+		Scan(&total).Error
+
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
