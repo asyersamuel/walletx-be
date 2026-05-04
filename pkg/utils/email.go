@@ -8,22 +8,20 @@ import (
 )
 
 type EmailService struct {
-	config configs.IMAPConfig
+	config configs.SMTPConfig
 }
 
-func NewEmailService(cfg configs.IMAPConfig) *EmailService {
+func NewEmailService(cfg configs.SMTPConfig) *EmailService {
 	return &EmailService{
 		config: cfg,
 	}
 }
 
 func (s *EmailService) SendVerificationEmail(toEmail string, verificationLink string) error {
-	from := s.config.Email
+	from := s.config.User
 	password := s.config.Password
-	
-	// Default to smtp.gmail.com if not configured correctly (assuming IMAP_SERVER was imap.gmail.com)
-	smtpHost := "smtp.gmail.com"
-	smtpPort := "587"
+	smtpHost := s.config.Host
+	smtpPort := s.config.Port
 
 	// Create authentication
 	auth := smtp.PlainAuth("", from, password, smtpHost)
@@ -32,7 +30,7 @@ func (s *EmailService) SendVerificationEmail(toEmail string, verificationLink st
 	headers := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\n\n"
 
 	subject := "Subject: WalletX - Telegram Account Verification\n"
-	
+
 	// Create HTML body
 	htmlBody := fmt.Sprintf(`
 		<html>

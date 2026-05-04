@@ -5,42 +5,54 @@ import (
 	"fmt"
 	"time"
 
-	"walletx-be/configs"
+	"walletx-be/pkg/middleware"
 	"walletx-be/pkg/models"
-	"walletx-be/pkg/repository"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"google.golang.org/api/idtoken"
 )
 
-// DTO hanya menerima ID Token dari Frontend
 type GoogleAuthInput struct {
 	IDToken string `json:"id_token" binding:"required"`
 }
 
-type AuthService struct {
-	userRepo repository.UserRepository
-	cfg      *configs.Config
-	repo     repository.TokenBlacklistRepository
+type AuthService interface {
+	ProcessGoogleAuth(ctx context.Context, input GoogleAuthInput) (*models.User, bool, error)
+	GenerateJWT(user *models.User) (string, error)
+	Logout(ctx context.Context, tokenString string) error
 }
 
-func NewAuthService(userRepo repository.UserRepository, cfg *configs.Config, repo repository.TokenBlacklistRepository) *AuthService {
-	return &AuthService{
-		userRepo: userRepo,
-		cfg:      cfg,
-		repo:     repo,
+type authService struct {
+	userRepo        UserBlacklistRepository
+	oauthClientID   string
+	jwtSecret       string
+	jwtExpiration   int
+	repo            middleware.TokenBlacklistRepository
+}
+
+type UserBlacklistRepository interface {
+	FindByGoogleID(ctx context.Context, googleID string) (*models.User, error)
+	Create(ctx context.Context, user *models.User) error
+	Update(ctx context.Context, user *models.User) error
+}
+
+func NewAuthService(userRepo UserBlacklistRepository, oauthClientID, jwtSecret string, jwtExpiration int, repo middleware.TokenBlacklistRepository) AuthService {
+	return &authService{
+		userRepo:        userRepo,
+		oauthClientID:   oauthClientID,
+		jwtSecret:       jwtSecret,
+		jwtExpiration:   jwtExpiration,
+		repo:            repo,
 	}
 }
 
-func (s *AuthService) ProcessGoogleAuth(input GoogleAuthInput) (*models.User, bool, error) {
-	// Validate idToken to Google Server
-	payload, err := idtoken.Validate(context.Background(), input.IDToken, s.cfg.OAuth.ClientID)
+func (s *authService) ProcessGoogleAuth(ctx context.Context, input GoogleAuthInput) (*models.User, bool, error) {
+	payload, err := idtoken.Validate(ctx, input.IDToken, s.oauthClientID)
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid google id_token: %v", err)
 	}
 
-	// Extract Data from Google
 	googleID := payload.Subject
 	email := fmt.Sprintf("%v", payload.Claims["email"])
 	name := fmt.Sprintf("%v", payload.Claims["name"])
@@ -49,8 +61,7 @@ func (s *AuthService) ProcessGoogleAuth(input GoogleAuthInput) (*models.User, bo
 		picture = fmt.Sprintf("%v", payload.Claims["picture"])
 	}
 
-	// Check if user exist on database
-	existingUser, err := s.userRepo.FindByGoogleID(googleID)
+	existingUser, err := s.userRepo.FindByGoogleID(ctx, googleID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -58,7 +69,7 @@ func (s *AuthService) ProcessGoogleAuth(input GoogleAuthInput) (*models.User, bo
 	if existingUser != nil {
 		existingUser.Name = name
 		existingUser.Picture = picture
-		s.userRepo.Update(existingUser)
+		s.userRepo.Update(ctx, existingUser)
 		return existingUser, false, nil
 	}
 
@@ -69,7 +80,7 @@ func (s *AuthService) ProcessGoogleAuth(input GoogleAuthInput) (*models.User, bo
 		Picture:  picture,
 	}
 
-	err = s.userRepo.Create(newUser)
+	err = s.userRepo.Create(ctx, newUser)
 	if err != nil {
 		return nil, false, err
 	}
@@ -77,23 +88,23 @@ func (s *AuthService) ProcessGoogleAuth(input GoogleAuthInput) (*models.User, bo
 	return newUser, true, nil
 }
 
-func (s *AuthService) GenerateJWT(user *models.User) (string, error) {
+func (s *authService) GenerateJWT(user *models.User) (string, error) {
 	jti := uuid.New().String()
 	claims := jwt.MapClaims{
 		"user_id": user.ID.String(),
 		"email":   user.Email,
 		"jti":     jti,
-		"exp":     time.Now().Add(time.Hour * time.Duration(s.cfg.JWT.Expiration)).Unix(),
+		"exp":     time.Now().Add(time.Hour * time.Duration(s.jwtExpiration)).Unix(),
 		"iat":     time.Now().Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(s.cfg.JWT.Secret))
+	return token.SignedString([]byte(s.jwtSecret))
 }
 
-func (s *AuthService) Logout(ctx context.Context, tokenString string) error {
+func (s *authService) Logout(ctx context.Context, tokenString string) error {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		return []byte(s.cfg.JWT.Secret), nil
+		return []byte(s.jwtSecret), nil
 	})
 	if err != nil {
 		return fmt.Errorf("invalid token: %w", err)

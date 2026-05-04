@@ -6,54 +6,45 @@ import (
 	"fmt"
 	"time"
 
+	"walletx-be/internal/domain/dto"
+	"walletx-be/internal/ports"
 	"walletx-be/pkg/models"
 	"walletx-be/pkg/repository"
 
 	"github.com/google/uuid"
 )
 
+type CreateRecurringInput = dto.CreateRecurringInput
+type UpdateRecurringInput = dto.UpdateRecurringInput
+
 var validFrequencies = map[string]bool{"weekly": true, "monthly": true, "yearly": true}
 
-// RecurringService defines the business logic contract for recurring transaction configs
 type RecurringService interface {
-	CreateRecurring(userID uuid.UUID, input CreateRecurringInput) (*models.RecurringConfig, error)
-	ListRecurrings(userID uuid.UUID) ([]models.RecurringConfig, error)
-	GetRecurringByID(id, userID uuid.UUID) (*models.RecurringConfig, error)
-	UpdateRecurring(id, userID uuid.UUID, input UpdateRecurringInput) (*models.RecurringConfig, error)
-	DeleteRecurring(id, userID uuid.UUID) error
-	ProcessDueRecurrings() error
-}
-
-// CreateRecurringInput is the DTO for creating a recurring config
-type CreateRecurringInput struct {
-	CategoryID uuid.UUID `json:"category_id" binding:"required"`
-	Amount     float64   `json:"amount"      binding:"required,gt=0"`
-	Frequency  string    `json:"frequency"   binding:"required"`
-	StartDate  time.Time `json:"start_date"  binding:"required"`
-}
-
-// UpdateRecurringInput is the DTO for updating a recurring config
-type UpdateRecurringInput struct {
-	Amount    float64   `json:"amount"    binding:"required,gt=0"`
-	Frequency string    `json:"frequency" binding:"required"`
-	StartDate time.Time `json:"start_date"`
+	CreateRecurring(ctx context.Context, userID uuid.UUID, input CreateRecurringInput) (*models.RecurringConfig, error)
+	ListRecurrings(ctx context.Context, userID uuid.UUID) ([]models.RecurringConfig, error)
+	GetRecurringByID(ctx context.Context, id, userID uuid.UUID) (*models.RecurringConfig, error)
+	UpdateRecurring(ctx context.Context, id, userID uuid.UUID, input UpdateRecurringInput) (*models.RecurringConfig, error)
+	DeleteRecurring(ctx context.Context, id, userID uuid.UUID) error
+	ProcessDueRecurrings(ctx context.Context) error
 }
 
 type recurringService struct {
-	recurringRepo   repository.RecurringRepository
-	transactionRepo repository.TransactionRepository
-	cacheRepo       repository.CacheRepository
+	recurringRepo    repository.RecurringRepository
+	transactionRepo  repository.TransactionRepository
+	cacheManager     ports.DashboardCacheManager
+	logger           ports.Logger
 }
 
-func NewRecurringService(recurringRepo repository.RecurringRepository, transactionRepo repository.TransactionRepository, cacheRepo repository.CacheRepository) RecurringService {
+func NewRecurringService(recurringRepo repository.RecurringRepository, transactionRepo repository.TransactionRepository, cacheManager ports.DashboardCacheManager, logger ports.Logger) RecurringService {
 	return &recurringService{
 		recurringRepo:   recurringRepo,
 		transactionRepo: transactionRepo,
-		cacheRepo:       cacheRepo,
+		cacheManager:    cacheManager,
+		logger:          logger,
 	}
 }
 
-func (s *recurringService) CreateRecurring(userID uuid.UUID, input CreateRecurringInput) (*models.RecurringConfig, error) {
+func (s *recurringService) CreateRecurring(ctx context.Context, userID uuid.UUID, input CreateRecurringInput) (*models.RecurringConfig, error) {
 	if !validFrequencies[input.Frequency] {
 		return nil, fmt.Errorf("invalid frequency '%s': must be 'weekly', 'monthly', or 'yearly'", input.Frequency)
 	}
@@ -67,24 +58,24 @@ func (s *recurringService) CreateRecurring(userID uuid.UUID, input CreateRecurri
 		Amount:      input.Amount,
 		Frequency:   input.Frequency,
 		StartDate:   input.StartDate,
-		NextDueDate: input.StartDate, // First due date equals start date
+		NextDueDate: input.StartDate,
 	}
 
-	if err := s.recurringRepo.Create(config); err != nil {
+	if err := s.recurringRepo.Create(ctx, config); err != nil {
 		return nil, err
 	}
 	return config, nil
 }
 
-func (s *recurringService) ListRecurrings(userID uuid.UUID) ([]models.RecurringConfig, error) {
-	return s.recurringRepo.List(userID)
+func (s *recurringService) ListRecurrings(ctx context.Context, userID uuid.UUID) ([]models.RecurringConfig, error) {
+	return s.recurringRepo.List(ctx, userID)
 }
 
-func (s *recurringService) GetRecurringByID(id, userID uuid.UUID) (*models.RecurringConfig, error) {
-	return s.recurringRepo.GetByID(id, userID)
+func (s *recurringService) GetRecurringByID(ctx context.Context, id, userID uuid.UUID) (*models.RecurringConfig, error) {
+	return s.recurringRepo.GetByID(ctx, id, userID)
 }
 
-func (s *recurringService) UpdateRecurring(id, userID uuid.UUID, input UpdateRecurringInput) (*models.RecurringConfig, error) {
+func (s *recurringService) UpdateRecurring(ctx context.Context, id, userID uuid.UUID, input UpdateRecurringInput) (*models.RecurringConfig, error) {
 	if !validFrequencies[input.Frequency] {
 		return nil, fmt.Errorf("invalid frequency '%s': must be 'weekly', 'monthly', or 'yearly'", input.Frequency)
 	}
@@ -92,7 +83,7 @@ func (s *recurringService) UpdateRecurring(id, userID uuid.UUID, input UpdateRec
 		return nil, errors.New("amount must be greater than 0")
 	}
 
-	config, err := s.recurringRepo.GetByID(id, userID)
+	config, err := s.recurringRepo.GetByID(ctx, id, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,18 +94,18 @@ func (s *recurringService) UpdateRecurring(id, userID uuid.UUID, input UpdateRec
 		config.StartDate = input.StartDate
 	}
 
-	if err := s.recurringRepo.Update(config); err != nil {
+	if err := s.recurringRepo.Update(ctx, config); err != nil {
 		return nil, err
 	}
 	return config, nil
 }
 
-func (s *recurringService) DeleteRecurring(id, userID uuid.UUID) error {
-	return s.recurringRepo.Delete(id, userID)
+func (s *recurringService) DeleteRecurring(ctx context.Context, id, userID uuid.UUID) error {
+	return s.recurringRepo.Delete(ctx, id, userID)
 }
 
-func (s *recurringService) ProcessDueRecurrings() error {
-	configs, err := s.recurringRepo.GetDueConfigs()
+func (s *recurringService) ProcessDueRecurrings(ctx context.Context) error {
+	configs, err := s.recurringRepo.GetDueConfigs(ctx)
 	if err != nil {
 		return err
 	}
@@ -123,7 +114,6 @@ func (s *recurringService) ProcessDueRecurrings() error {
 		return nil
 	}
 
-	// Track unique user IDs for cache invalidation
 	affectedUsers := make(map[uuid.UUID]bool)
 
 	for _, config := range configs {
@@ -139,19 +129,16 @@ func (s *recurringService) ProcessDueRecurrings() error {
 			IsRecurring:     true,
 		}
 
-		if err := s.transactionRepo.Create(transaction); err != nil {
-			continue // keep processing other configs even if one fails
+		if err := s.transactionRepo.Create(ctx, transaction); err != nil {
+			continue
 		}
 
-		// Mark user as affected for cache invalidation
 		affectedUsers[config.UserID] = true
 
 		config.NextDueDate = s.advanceDate(config.NextDueDate, config.Frequency)
-		_ = s.recurringRepo.Update(&config)
+		_ = s.recurringRepo.Update(ctx, &config)
 	}
 
-	// Invalidate dashboard cache for all affected users
-	ctx := context.Background()
 	for userID := range affectedUsers {
 		s.invalidateDashboardCache(ctx, userID)
 	}
@@ -159,16 +146,9 @@ func (s *recurringService) ProcessDueRecurrings() error {
 	return nil
 }
 
-// invalidateDashboardCache removes cached dashboard data for a user
 func (s *recurringService) invalidateDashboardCache(ctx context.Context, userID uuid.UUID) {
-	cacheKey := fmt.Sprintf("cache:dashboard:budget_summary:%s", userID.String())
-	_ = s.cacheRepo.DeleteCache(ctx, cacheKey)
-
-	for _, month := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} {
-		for _, year := range []int{2024, 2025, 2026, 2027} {
-			dailyKey := fmt.Sprintf("cache:dashboard:daily_total:%s:%d:%d", userID.String(), month, year)
-			_ = s.cacheRepo.DeleteCache(ctx, dailyKey)
-		}
+	if err := s.cacheManager.InvalidateUserCache(ctx, userID.String()); err != nil {
+		s.logger.WithError(err).Warn("Failed to invalidate dashboard cache")
 	}
 }
 
@@ -178,7 +158,7 @@ func (s *recurringService) advanceDate(t time.Time, frequency string) time.Time 
 		return t.AddDate(0, 0, 7)
 	case "yearly":
 		return t.AddDate(1, 0, 0)
-	default: // "monthly"
+	default:
 		return t.AddDate(0, 1, 0)
 	}
 }

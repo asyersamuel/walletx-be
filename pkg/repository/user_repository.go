@@ -1,64 +1,91 @@
 package repository
 
 import (
+	"context"
 	"errors"
+	"walletx-be/internal/domain"
+	"walletx-be/internal/ports"
 	"walletx-be/pkg/models"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
-// UserRepository mendefinisikan kontrak fungsi untuk entitas User
 type UserRepository interface {
-	Create(user *models.User) error
-	GetByID(id uuid.UUID) (*models.User, error)
-	FindByEmail(email string) (*models.User, error)
-	FindByGoogleID(googleID string) (*models.User, error)
-	Update(user *models.User) error
+	Create(ctx context.Context, user *models.User) error
+	GetByID(ctx context.Context, id uuid.UUID) (*models.User, error)
+	FindByEmail(ctx context.Context, email string) (*models.User, error)
+	FindByGoogleID(ctx context.Context, googleID string) (*models.User, error)
+	FindByTelegramChatID(ctx context.Context, chatID string) (*models.User, error)
+	Update(ctx context.Context, user *models.User) error
 }
 
 type userRepository struct {
-	db *gorm.DB
+	db     *gorm.DB
+	logger ports.Logger
 }
 
-// Constructor untuk membuat instance UserRepository
-func NewUserRepository(db *gorm.DB) UserRepository {
-	return &userRepository{db: db}
+func NewUserRepository(db *gorm.DB, logger ports.Logger) UserRepository {
+	return &userRepository{
+		db:     db,
+		logger: logger,
+	}
 }
 
-func (r *userRepository) Create(user *models.User) error {
-	return r.db.Create(user).Error
+func (r *userRepository) Create(ctx context.Context, user *models.User) error {
+	err := r.db.WithContext(ctx).Create(user).Error
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return domain.ErrDuplicate
+	}
+	return err
 }
 
-func (r *userRepository) GetByID(id uuid.UUID) (*models.User, error) {
+func (r *userRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	var user models.User
-	if err := r.db.First(&user, "id = ?", id).Error; err != nil {
+	if err := r.db.WithContext(ctx).First(&user, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
 		return nil, err
 	}
 	return &user, nil
 }
 
-// FindByEmail: Sangat penting untuk mencocokkan X-Forwarded-For dari email masuk
-func (r *userRepository) FindByEmail(email string) (*models.User, error) {
+func (r *userRepository) FindByEmail(ctx context.Context, email string) (*models.User, error) {
 	var user models.User
-	if err := r.db.Where("email = ?", email).First(&user).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
 		return nil, err
 	}
 	return &user, nil
 }
 
-func (r *userRepository) Update(user *models.User) error {
-	return r.db.Save(user).Error
+func (r *userRepository) Update(ctx context.Context, user *models.User) error {
+	return r.db.WithContext(ctx).Save(user).Error
 }
 
-func (r *userRepository) FindByGoogleID(googleID string) (*models.User, error) {
+func (r *userRepository) FindByGoogleID(ctx context.Context, googleID string) (*models.User, error) {
 	var user models.User
-	err := r.db.Where("google_id = ?", googleID).First(&user).Error
+	err := r.db.WithContext(ctx).Where("google_id = ?", googleID).First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil // User belum ada
+			return nil, nil
 		}
-		return nil, err // Ada error database beneran
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepository) FindByTelegramChatID(ctx context.Context, chatID string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).Where("telegram_chat_id = ?", chatID).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
 	return &user, nil
 }

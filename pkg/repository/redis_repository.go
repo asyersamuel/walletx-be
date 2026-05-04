@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"walletx-be/internal/ports"
+
 	"github.com/redis/go-redis/v9"
-	"github.com/sirupsen/logrus"
 )
 
 type TokenBlacklistRepository interface {
@@ -17,21 +18,25 @@ type TokenBlacklistRepository interface {
 
 type tokenBlacklistRepository struct {
 	client *redis.Client
+	logger ports.Logger
 }
 
-func NewTokenBlacklistRepository(client *redis.Client) TokenBlacklistRepository {
-	return &tokenBlacklistRepository{client: client}
+func NewTokenBlacklistRepository(client *redis.Client, logger ports.Logger) TokenBlacklistRepository {
+	return &tokenBlacklistRepository{
+		client: client,
+		logger: logger,
+	}
 }
 
 func (r *tokenBlacklistRepository) BlacklistToken(ctx context.Context, jti string, ttl time.Duration) error {
 	key := fmt.Sprintf("blacklist:%s", jti)
 	err := r.client.SetEx(ctx, key, "1", ttl).Err()
 	if err != nil {
-		logrus.WithFields(logrus.Fields{"jti": jti, "error": err}).Error("Failed to blacklist token in Redis")
+		r.logger.WithFields(map[string]interface{}{"jti": jti, "error": err}).Error("Failed to blacklist token in Redis")
 		return err
 	}
 
-	logrus.WithFields(logrus.Fields{"jti": jti, "ttl": ttl}).Info("Token successfully blacklisted in Redis")
+	r.logger.WithFields(map[string]interface{}{"jti": jti, "ttl": ttl}).Info("Token successfully blacklisted in Redis")
 	return nil
 }
 
@@ -42,7 +47,7 @@ func (r *tokenBlacklistRepository) IsTokenBlacklisted(ctx context.Context, jti s
 		return false, nil
 	}
 	if err != nil {
-		logrus.WithFields(logrus.Fields{"jti": jti, "error": err}).Warn("Failed to check token blacklist status")
+		r.logger.WithFields(map[string]interface{}{"jti": jti, "error": err}).Warn("Failed to check token blacklist status")
 		return false, err
 	}
 	return val == "1", nil
@@ -62,7 +67,6 @@ func (r *noOpBlacklistRepository) IsTokenBlacklisted(ctx context.Context, jti st
 	return false, nil
 }
 
-// CacheRepository defines interface for generic caching operations
 type CacheRepository interface {
 	SetCache(ctx context.Context, key string, value interface{}, ttl time.Duration) error
 	GetCache(ctx context.Context, key string, dest interface{}) error
@@ -71,29 +75,33 @@ type CacheRepository interface {
 
 type cacheRepository struct {
 	client *redis.Client
+	logger ports.Logger
 }
 
-func NewCacheRepository(client *redis.Client) CacheRepository {
-	return &cacheRepository{client: client}
+func NewCacheRepository(client *redis.Client, logger ports.Logger) CacheRepository {
+	return &cacheRepository{
+		client: client,
+		logger: logger,
+	}
 }
 
 func (r *cacheRepository) SetCache(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
 	if r.client == nil {
-		return nil // Redis not available, skip caching
+		return nil
 	}
 
 	data, err := json.Marshal(value)
 	if err != nil {
-		logrus.WithError(err).Error("Failed to marshal cache value")
+		r.logger.WithError(err).Error("Failed to marshal cache value")
 		return fmt.Errorf("failed to marshal cache value: %w", err)
 	}
 
 	if err := r.client.SetEx(ctx, key, string(data), ttl).Err(); err != nil {
-		logrus.WithFields(logrus.Fields{"key": key, "error": err}).Error("Failed to set cache in Redis")
+		r.logger.WithFields(map[string]interface{}{"key": key, "error": err}).Error("Failed to set cache in Redis")
 		return err
 	}
 
-	logrus.WithFields(logrus.Fields{"key": key, "ttl": ttl}).Info("Successfully set data to Redis cache")
+	r.logger.WithFields(map[string]interface{}{"key": key, "ttl": ttl}).Info("Successfully set data to Redis cache")
 	return nil
 }
 
@@ -104,34 +112,34 @@ func (r *cacheRepository) GetCache(ctx context.Context, key string, dest interfa
 
 	val, err := r.client.Get(ctx, key).Result()
 	if err == redis.Nil {
-		logrus.WithField("key", key).Info("Redis cache miss")
+		r.logger.WithField("key", key).Info("Redis cache miss")
 		return fmt.Errorf("cache miss")
 	}
 	if err != nil {
-		logrus.WithFields(logrus.Fields{"key": key, "error": err}).Warn("Failed to get cache from Redis")
+		r.logger.WithFields(map[string]interface{}{"key": key, "error": err}).Warn("Failed to get cache from Redis")
 		return err
 	}
 
 	if err := json.Unmarshal([]byte(val), dest); err != nil {
-		logrus.WithError(err).Error("Failed to unmarshal cache data")
+		r.logger.WithError(err).Error("Failed to unmarshal cache data")
 		return err
 	}
 
-	logrus.WithField("key", key).Info("Redis cache hit")
+	r.logger.WithField("key", key).Info("Redis cache hit")
 	return nil
 }
 
 func (r *cacheRepository) DeleteCache(ctx context.Context, key string) error {
 	if r.client == nil {
-		return nil // Redis not available, skip
+		return nil
 	}
 
 	if err := r.client.Del(ctx, key).Err(); err != nil {
-		logrus.WithFields(logrus.Fields{"key": key, "error": err}).Error("Failed to invalidate cache from Redis")
+		r.logger.WithFields(map[string]interface{}{"key": key, "error": err}).Error("Failed to invalidate cache from Redis")
 		return err
 	}
 
-	logrus.WithField("key", key).Info("Redis cache invalidated successfully")
+	r.logger.WithField("key", key).Info("Redis cache invalidated successfully")
 	return nil
 }
 

@@ -4,12 +4,12 @@ import (
 	"errors"
 	"net/http"
 
+	"walletx-be/internal/domain"
 	"walletx-be/pkg/services"
 	"walletx-be/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 type CategoryHandler struct {
@@ -20,7 +20,6 @@ func NewCategoryHandler(categoryService services.CategoryService) *CategoryHandl
 	return &CategoryHandler{categoryService: categoryService}
 }
 
-// parseUserID is a shared helper to extract and validate the JWT user ID from context
 func parseUserID(c *gin.Context) (uuid.UUID, bool) {
 	val, exists := c.Get("user_id")
 	if !exists {
@@ -35,7 +34,6 @@ func parseUserID(c *gin.Context) (uuid.UUID, bool) {
 	return userUUID, true
 }
 
-// CreateCategory POST /api/v1/categories
 func (h *CategoryHandler) CreateCategory(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -51,8 +49,12 @@ func (h *CategoryHandler) CreateCategory(c *gin.Context) {
 		return
 	}
 
-	category, err := h.categoryService.CreateCategory(userID, input.Name, input.Icon)
+	category, err := h.categoryService.CreateCategory(c.Request.Context(), userID, input.Name, input.Icon)
 	if err != nil {
+		if errors.Is(err, domain.ErrDuplicate) {
+			utils.FailResponseWithStatus(c, http.StatusConflict, "Category already exists")
+			return
+		}
 		utils.ErrorResponse(c, err.Error())
 		return
 	}
@@ -60,14 +62,13 @@ func (h *CategoryHandler) CreateCategory(c *gin.Context) {
 	utils.SuccessResponseWithStatus(c, http.StatusCreated, category, "Category created successfully")
 }
 
-// ListCategories GET /api/v1/categories
 func (h *CategoryHandler) ListCategories(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
 		return
 	}
 
-	categories, err := h.categoryService.ListCategories(userID)
+	categories, err := h.categoryService.ListCategories(c.Request.Context(), userID)
 	if err != nil {
 		utils.ErrorResponse(c, "Failed to retrieve categories")
 		return
@@ -76,7 +77,6 @@ func (h *CategoryHandler) ListCategories(c *gin.Context) {
 	utils.SuccessResponse(c, categories, "Categories retrieved successfully")
 }
 
-// GetCategoryByID GET /api/v1/categories/:id
 func (h *CategoryHandler) GetCategoryByID(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -89,9 +89,9 @@ func (h *CategoryHandler) GetCategoryByID(c *gin.Context) {
 		return
 	}
 
-	category, err := h.categoryService.GetCategoryByID(id, userID)
+	category, err := h.categoryService.GetCategoryByID(c.Request.Context(), id, userID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Category not found")
 			return
 		}
@@ -102,7 +102,6 @@ func (h *CategoryHandler) GetCategoryByID(c *gin.Context) {
 	utils.SuccessResponse(c, category, "Category retrieved successfully")
 }
 
-// UpdateCategory PUT /api/v1/categories/:id
 func (h *CategoryHandler) UpdateCategory(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -124,9 +123,9 @@ func (h *CategoryHandler) UpdateCategory(c *gin.Context) {
 		return
 	}
 
-	category, err := h.categoryService.UpdateCategory(id, userID, input.Name, input.Icon)
+	category, err := h.categoryService.UpdateCategory(c.Request.Context(), id, userID, input.Name, input.Icon)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Category not found")
 			return
 		}
@@ -137,7 +136,6 @@ func (h *CategoryHandler) UpdateCategory(c *gin.Context) {
 	utils.SuccessResponse(c, category, "Category updated successfully")
 }
 
-// DeleteCategory DELETE /api/v1/categories/:id
 func (h *CategoryHandler) DeleteCategory(c *gin.Context) {
 	userID, ok := parseUserID(c)
 	if !ok {
@@ -150,8 +148,8 @@ func (h *CategoryHandler) DeleteCategory(c *gin.Context) {
 		return
 	}
 
-	if err := h.categoryService.DeleteCategory(id, userID); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := h.categoryService.DeleteCategory(c.Request.Context(), id, userID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
 			utils.NotFoundResponse(c, "Category not found")
 			return
 		}
