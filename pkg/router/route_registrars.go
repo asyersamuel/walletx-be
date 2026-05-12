@@ -88,3 +88,11 @@ func RegisterCronRoutes(r *gin.RouterGroup, cronHandler *handlers.CronHandler, c
 		cronGroup.GET("/recurring", cronHandler.RecurringSync)
 	}
 }
+
+func RegisterWebhookRoutes(r *gin.RouterGroup, webhookHandler *handlers.WebhookHandler, qstashSigningKey string) {
+	webhookGroup := r.Group("/internal/webhooks")
+	webhookGroup.Use(middleware.QStashAuthMiddleware(qstashSigningKey))
+	{
+		webhookGroup.POST("/email-processor", webhookHandler.ProcessEmail)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	dashboardcache "walletx-be/internal/infrastructure/cache"
 	"walletx-be/internal/infrastructure/logger"
 	emailparser "walletx-be/internal/infrastructure/parser"
+	"walletx-be/internal/infrastructure/queue"
 	"walletx-be/internal/ports"
 	repoCache "walletx-be/pkg/cache"
 	"walletx-be/pkg/database"
@@ -70,12 +71,14 @@ func BuildApp(cfg *configs.Config) (*App, error) {
 
 	authService := services.NewAuthService(userRepo, cfg.OAuth.ClientID, cfg.JWT.Secret, cfg.JWT.Expiration, blacklistRepo)
 	emailParser := emailparser.NewGeminiEmailParser(appLogger, cfg.Gemini.APIKey)
-	txProcessor := services.NewTransactionProcessor(userRepo, transactionRepo, categoryRepo, emailParser, dashboardCacheManager, appLogger)
-	txService := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, txProcessor, dashboardCacheManager, appLogger)
+	txService := services.NewTransactionService(userRepo, transactionRepo, categoryRepo, dashboardCacheManager, appLogger)
 	categoryService := services.NewCategoryService(categoryRepo, appLogger)
 	budgetService := services.NewBudgetService(budgetRepo, summaryRepo, appLogger)
 	recurringService := services.NewRecurringService(recurringRepo, transactionRepo, dashboardCacheManager, appLogger)
 	dashboardService := services.NewDashboardService(budgetRepo, summaryRepo, cacheRepo, appLogger)
+
+	messageQueueService := queue.NewUpstashQStashService(cfg.QStash, appLogger)
+	emailProcessorService := services.NewEmailProcessorService(userRepo, transactionRepo, categoryRepo, emailParser, dashboardCacheManager, appLogger)
 
 	oauthConfig := &oauth2.Config{
 		ClientID:     cfg.OAuth.ClientID,
@@ -90,8 +93,9 @@ func BuildApp(cfg *configs.Config) (*App, error) {
 	budgetHandler := handlers.NewBudgetHandler(budgetService)
 	recurringHandler := handlers.NewRecurringHandler(recurringService)
 	dashboardHandler := handlers.NewDashboardHandler(dashboardService)
+	webhookHandler := handlers.NewWebhookHandler(emailProcessorService)
 
-	imapService := services.NewIMAPService(cfg.IMAP.Email, cfg.IMAP.Password, txProcessor, appLogger)
+	imapService := services.NewIMAPService(cfg.IMAP.Email, cfg.IMAP.Password, messageQueueService, appLogger)
 	cronHandler := handlers.NewCronHandler(healthRepo, imapService, recurringService)
 
 	r := router.SetupRouter(
@@ -102,6 +106,7 @@ func BuildApp(cfg *configs.Config) (*App, error) {
 		recurringHandler,
 		dashboardHandler,
 		cronHandler,
+		webhookHandler,
 		cfg.JWT.Secret,
 		cfg.App.DevMode,
 		cfg.Media.StorageType,
@@ -109,6 +114,7 @@ func BuildApp(cfg *configs.Config) (*App, error) {
 		cfg.Media.UploadDir,
 		blacklistRepo,
 		cfg.Cron.Secret,
+		cfg.QStash.SigningKey,
 	)
 
 	cleanup := func() {

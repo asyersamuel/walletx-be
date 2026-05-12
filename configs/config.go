@@ -16,6 +16,7 @@ type Config struct {
 	Gemini   GeminiConfig
 	OAuth    OAuthConfig
 	Cron     CronConfig
+	QStash   QStashConfig
 }
 
 type IMAPConfig struct {
@@ -30,6 +31,13 @@ type GeminiConfig struct {
 
 type CronConfig struct {
 	Secret string
+}
+
+type QStashConfig struct {
+	Token         string
+	URL           string
+	SigningKey    string
+	WebhookBaseURL string
 }
 
 type OAuthConfig struct {
@@ -135,6 +143,12 @@ func Load() *Config {
 		},
 		Cron: CronConfig{
 			Secret: getEnv("CRON_SECRET", ""),
+		},
+		QStash: QStashConfig{
+			Token:          getEnv("QSTASH_TOKEN", ""),
+			URL:            getEnv("QSTASH_URL", "https://qstash.upstash.io/v2/publish/"),
+			SigningKey:     getEnv("QSTASH_CURRENT_SIGNING_KEY", ""),
+			WebhookBaseURL: getEnv("WEBHOOK_BASE_URL", ""),
 		},
 	}
 }

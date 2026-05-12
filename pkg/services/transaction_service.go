@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"errors"
-	"time"
 
 	"walletx-be/internal/domain"
 	"walletx-be/internal/domain/dto"
@@ -22,7 +21,6 @@ type CreateTransactionInput = dto.CreateTransactionInput
 type UpdateTransactionInput = dto.UpdateTransactionInput
 
 type TransactionService interface {
-	ProcessTransactionEmail(ctx context.Context, senderEmail string, messageID string, rawBody string, date time.Time) error
 	CreateManualTransaction(ctx context.Context, userID uuid.UUID, input CreateTransactionInput) (*models.Transaction, error)
 	UpdateTransaction(ctx context.Context, userID, txID uuid.UUID, input UpdateTransactionInput) (*models.Transaction, error)
 	DeleteTransaction(ctx context.Context, userID, txID uuid.UUID) error
@@ -38,7 +36,6 @@ type transactionService struct {
 	userRepo        UserRepository
 	transactionRepo TransactionRepository
 	categoryRepo    CategoryRepository
-	txProcessor     TransactionProcessor
 	cacheManager    ports.DashboardCacheManager
 	logger          ports.Logger
 }
@@ -69,7 +66,6 @@ func NewTransactionService(
 	userRepo UserRepository,
 	transactionRepo TransactionRepository,
 	categoryRepo CategoryRepository,
-	txProcessor TransactionProcessor,
 	cacheManager ports.DashboardCacheManager,
 	logger ports.Logger,
 ) TransactionService {
@@ -77,14 +73,9 @@ func NewTransactionService(
 		userRepo:        userRepo,
 		transactionRepo: transactionRepo,
 		categoryRepo:    categoryRepo,
-		txProcessor:     txProcessor,
 		cacheManager:    cacheManager,
 		logger:          logger,
 	}
-}
-
-func (s *transactionService) ProcessTransactionEmail(ctx context.Context, senderEmail string, messageID string, rawBody string, date time.Time) error {
-	return s.txProcessor.ProcessTransactionEmail(ctx, senderEmail, messageID, rawBody, date)
 }
 
 func (s *transactionService) GetUserTransactions(ctx context.Context, userID uuid.UUID, limit, offset int, filters TransactionFilters, sort SortOption) ([]models.Transaction, error) {

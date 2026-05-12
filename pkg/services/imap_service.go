@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"walletx-be/internal/domain/dto"
 	"walletx-be/internal/ports"
 
 	"github.com/emersion/go-imap"
@@ -11,20 +12,20 @@ import (
 )
 
 type IMAPService struct {
-	Server    string
-	Email     string
-	Password  string
-	Processor TransactionProcessor
-	logger    ports.Logger
+	Server        string
+	Email         string
+	Password      string
+	queueService  ports.MessageQueueService
+	logger        ports.Logger
 }
 
-func NewIMAPService(email, password string, processor TransactionProcessor, logger ports.Logger) *IMAPService {
+func NewIMAPService(email, password string, queueService ports.MessageQueueService, logger ports.Logger) *IMAPService {
 	return &IMAPService{
-		Server:    "imap.gmail.com:993",
-		Email:     email,
-		Password:  password,
-		Processor: processor,
-		logger:    logger,
+		Server:       "imap.gmail.com:993",
+		Email:        email,
+		Password:     password,
+		queueService: queueService,
+		logger:       logger,
 	}
 }
 
@@ -128,9 +129,16 @@ func (s *IMAPService) ProcessUnseenEmails(ctx context.Context) error {
 			}
 		}
 
-		err := s.Processor.ProcessTransactionEmail(ctx, senderEmail, messageID, rawBody, date)
+		payload := dto.EmailProcessingPayload{
+			MessageID: messageID,
+			Sender:    senderEmail,
+			Date:      date,
+			Body:      rawBody,
+		}
+
+		err = s.queueService.Publish(ctx, payload)
 		if err != nil {
-			logger.WithError(err).Error("Failed to process transaction in service")
+			logger.WithError(err).Error("Failed to publish email to queue, skipping SEEN flag")
 			continue
 		}
 
@@ -142,7 +150,7 @@ func (s *IMAPService) ProcessUnseenEmails(ctx context.Context) error {
 		if err := c.Store(markSet, flagOp, flags, nil); err != nil {
 			logger.WithError(err).Warn("Failed to mark email as SEEN")
 		} else {
-			logger.Info("Email processed and marked as SEEN")
+			logger.Info("Email published and marked as SEEN")
 		}
 	}
 

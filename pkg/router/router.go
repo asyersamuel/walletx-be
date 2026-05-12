@@ -15,6 +15,7 @@ func SetupRouter(
 	recurringHandler *handlers.RecurringHandler,
 	dashboardHandler *handlers.DashboardHandler,
 	cronHandler      *handlers.CronHandler,
+	webhookHandler   *handlers.WebhookHandler,
 	jwtSecret        string,
 	devMode          bool,
 	storageType      string,
@@ -22,6 +23,7 @@ func SetupRouter(
 	uploadDir        string,
 	blacklistRepo    middleware.TokenBlacklistRepository,
 	cronSecret       string,
+	qstashSigningKey string,
 ) *gin.Engine {
 	r := gin.Default()
 
@@ -48,6 +50,7 @@ func SetupRouter(
 		}
 
 		RegisterCronRoutes(api, cronHandler, cronSecret)
+		RegisterWebhookRoutes(api, webhookHandler, qstashSigningKey)
 	}
 
 	return r
