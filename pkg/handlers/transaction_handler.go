@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"walletx-be/internal/domain"
+	"walletx-be/core/domain"
 	"walletx-be/pkg/services"
 	"walletx-be/pkg/utils"
 

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"walletx-be/internal/ports"
+	"walletx-be/core/ports"
 
 	"github.com/redis/go-redis/v9"
 )

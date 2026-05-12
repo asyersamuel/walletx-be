@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"walletx-be/internal/ports"
+	"walletx-be/core/ports"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"

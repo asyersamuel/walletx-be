@@ -5,11 +5,11 @@ import (
 	"errors"
 	"time"
 
-	"walletx-be/internal/domain"
-	"walletx-be/internal/domain/dto"
-	"walletx-be/internal/domain/query"
-	"walletx-be/internal/domain/report"
-	"walletx-be/internal/ports"
+	"walletx-be/core/domain"
+	"walletx-be/core/domain/dto"
+	"walletx-be/core/domain/query"
+	"walletx-be/core/domain/report"
+	"walletx-be/core/ports"
 	"walletx-be/pkg/models"
 
 	"github.com/google/uuid"

@@ -5,7 +5,7 @@ import (
 	"os"
 	"sync"
 
-	"walletx-be/internal/bootstrap"
+	"walletx-be/core/bootstrap"
 
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"

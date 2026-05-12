@@ -5,9 +5,9 @@ import (
 	"errors"
 	"time"
 
-	"walletx-be/internal/domain"
-	"walletx-be/internal/domain/dto"
-	"walletx-be/internal/ports"
+	"walletx-be/core/domain"
+	"walletx-be/core/domain/dto"
+	"walletx-be/core/ports"
 	"walletx-be/pkg/models"
 	"walletx-be/pkg/repository"
 

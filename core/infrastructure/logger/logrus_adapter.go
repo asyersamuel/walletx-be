@@ -1,7 +1,7 @@
 package logger
 
 import (
-	"walletx-be/internal/ports"
+	"walletx-be/core/ports"
 
 	"github.com/sirupsen/logrus"
 )

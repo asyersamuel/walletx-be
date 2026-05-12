@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"walletx-be/internal/domain"
-	"walletx-be/internal/ports"
+	"walletx-be/core/domain"
+	"walletx-be/core/ports"
 	"walletx-be/pkg/models"
 
 	"github.com/google/uuid"

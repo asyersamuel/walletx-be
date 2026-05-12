@@ -6,7 +6,7 @@ import (
 	"os/signal"	
 	"syscall"
 
-	"walletx-be/internal/bootstrap"
+	"walletx-be/core/bootstrap"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"

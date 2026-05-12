@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"walletx-be/internal/ports"
+	"walletx-be/core/ports"
 	"walletx-be/pkg/models"
 	"walletx-be/pkg/repository"
 

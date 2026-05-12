@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"walletx-be/internal/domain/parser"
-	"walletx-be/internal/ports"
+	"walletx-be/core/domain/parser"
+	"walletx-be/core/ports"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"

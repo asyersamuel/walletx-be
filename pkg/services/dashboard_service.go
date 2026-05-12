@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"walletx-be/internal/ports"
+	"walletx-be/core/ports"
 	"walletx-be/pkg/repository"
 
 	"github.com/google/uuid"

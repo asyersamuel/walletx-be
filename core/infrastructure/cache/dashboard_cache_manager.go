@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"walletx-be/internal/ports"
+	"walletx-be/core/ports"
 
 	"github.com/redis/go-redis/v9"
 )

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"walletx-be/configs"
-	"walletx-be/internal/domain/report"
+	"walletx-be/core/domain/report"
 	"walletx-be/pkg/models"
 	"walletx-be/pkg/repository"
 	"walletx-be/pkg/utils"
