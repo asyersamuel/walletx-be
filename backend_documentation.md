@@ -93,9 +93,9 @@ The backend is deployed to Vercel as a serverless function.
 
 - **`User`**: Core user profile (UUID, GoogleID, Email, Name, Picture, TelegramChatID).
 - **`Transaction`**: Records of spending (UUID, UserID, CategoryID, Amount, Merchant, Date, MessageID [for IMAP uniqueness]).
-- **`Category`**: User-defined categories (UUID, Name, Icon, Color).
-- **`Budget`**: Budget limits (UUID, UserID, CategoryID, LimitAmount, Month, Year).
-- **`RecurringConfig`**: Scheduled transaction settings (UUID, UserID, CategoryID, Amount, Frequency, NextDueDate).
+- **`Category`**: User-defined categories (UUID, Name, Icon).
+- **`Budget`** (model name: `CategoryLimit`): Budget limits (UUID, UserID, CategoryID, LimitAmount, Period, IsActive).
+- **`RecurringConfig`**: Scheduled transaction settings (UUID, UserID, CategoryID, Amount, Frequency, StartDate, NextDueDate).
 
 ---
 
@@ -106,17 +106,19 @@ All routes are prefixed with `/api/v1/`.
 | Group | Method | Endpoint | Description |
 |---|---|---|---|
 | **Public** | `GET` | `/ping` | Health check |
-| **Auth** | `POST` | `/auth/google` | Google SSO Login |
+| **Auth** | `POST` | `/auth/google` | Google SSO Login / Register |
 | **Telegram** | `POST` | `/telegram/webhook` | Receives updates from Telegram Bot |
 | **Telegram** | `GET` | `/telegram/verify` | Email verification token handler |
 | **Protected** | `POST` | `/auth/logout` | Invalidates JWT (Redis Blacklist) |
-| **Protected** | `CRUD` | `/transactions` | Full Transaction CRUD |
+| **Protected** | `GET` | `/users/me` | Get current user profile |
+| **Protected** | `CRUD` | `/transactions` | Full Transaction CRUD (+ filter, search, sort, CSV export) |
 | **Protected** | `CRUD` | `/categories` | Full Category CRUD |
 | **Protected** | `CRUD` | `/budgets` | Full Budget CRUD |
-| **Protected** | `GET` | `/budgets/progress` | Budget vs Actual Spending |
+| **Protected** | `GET` | `/budgets/progress` | Budget vs Actual Spending (current month) |
 | **Protected** | `CRUD` | `/recurrings` | Full RecurringConfig CRUD |
 | **Protected** | `GET` | `/reports/expenses` | Grouped expenses by category |
-| **Protected** | `GET` | `/reports/daily-calendar`| Daily spending aggregation |
+| **Protected** | `GET` | `/reports/budget-summary` | Budget limit vs spent merged view |
+| **Protected** | `GET` | `/reports/daily-calendar` | Daily spending aggregation by month |
 | **Cron** | `GET` | `/cron/imap` | Triggers IMAP email parsing |
 | **Cron** | `GET` | `/cron/recurring` | Triggers Recurring transaction injection |
 

@@ -16,6 +16,7 @@ func SetupRouter(
 	dashboardHandler *handlers.DashboardHandler,
 	cronHandler      *handlers.CronHandler,
 	telegramHandler  *handlers.TelegramHandler,
+	userHandler      *handlers.UserHandler,
 	jwtSecret        string,
 	devMode          bool,
 	storageType      string,
@@ -45,6 +46,7 @@ func SetupRouter(
 		protected.Use(middleware.AuthMiddleware(validator))
 		{
 			RegisterAuthLogoutRoutes(protected, authHandler)
+			RegisterUserRoutes(protected, userHandler)
 			RegisterTransactionRoutes(protected, txHandler)
 			RegisterCategoryRoutes(protected, categoryHandler)
 			RegisterBudgetRoutes(protected, budgetHandler)

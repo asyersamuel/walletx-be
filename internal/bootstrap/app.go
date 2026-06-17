@@ -93,6 +93,7 @@ func BuildApp(cfg *configs.Config) (*App, error) {
 	budgetHandler := handlers.NewBudgetHandler(budgetService)
 	recurringHandler := handlers.NewRecurringHandler(recurringService)
 	dashboardHandler := handlers.NewDashboardHandler(dashboardService)
+	userHandler := handlers.NewUserHandler(userRepo)
 
 	imapService := services.NewIMAPService(cfg.IMAP.Email, cfg.IMAP.Password, txProcessor, appLogger)
 	cronHandler := handlers.NewCronHandler(healthRepo, imapService, recurringService)
@@ -125,6 +126,7 @@ func BuildApp(cfg *configs.Config) (*App, error) {
 		dashboardHandler,
 		cronHandler,
 		telegramHandler,
+		userHandler,
 		cfg.JWT.Secret,
 		cfg.App.DevMode,
 		cfg.Media.StorageType,

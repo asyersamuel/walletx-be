@@ -7,6 +7,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func RegisterUserRoutes(r *gin.RouterGroup, userHandler *handlers.UserHandler) {
+	userGroup := r.Group("/users")
+	{
+		userGroup.GET("/me", userHandler.GetMe)
+	}
+}
+
 func RegisterAuthRoutes(r *gin.RouterGroup, authHandler *handlers.AuthHandler, devMode bool) {
 	auth := r.Group("/auth")
 	{
