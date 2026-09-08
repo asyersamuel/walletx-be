@@ -2,13 +2,13 @@ package category
 
 import (
 	"context"
-	"errors"
 
+	database "walletx-be/internal/platform/database"
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
-	"walletx-be/internal/shared/errors"
+	apperrors "walletx-be/internal/shared/errors"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // Repository is the persisted data access for Category aggregates.
@@ -22,68 +22,115 @@ type Repository interface {
 }
 
 type repository struct {
-	db     *gorm.DB
-	logger logger.Logger
+	queries *sqlc.Queries
+	logger  logger.Logger
 }
 
-func NewRepository(db *gorm.DB, logger logger.Logger) Repository {
-	return &repository{
-		db:     db,
-		logger: logger,
-	}
+func NewRepository(queries *sqlc.Queries, logger logger.Logger) Repository {
+	return &repository{queries: queries, logger: logger}
 }
 
 func (r *repository) Create(ctx context.Context, category *Category) error {
-	err := r.db.WithContext(ctx).Create(category).Error
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return apperrors.ErrDuplicate
+	row, err := r.queries.CreateCategory(ctx, sqlc.CreateCategoryParams{
+		UserID: database.UUIDParam(category.UserID),
+		Name:   category.Name,
+		Icon:   category.Icon,
+	})
+	if err != nil {
+		if database.IsUniqueViolation(err) {
+			return apperrors.ErrDuplicate
+		}
+		return err
 	}
-	return err
+	*category = categoryFromRow(row)
+	return nil
 }
 
 func (r *repository) List(ctx context.Context, userID uuid.UUID) ([]Category, error) {
-	var categories []Category
-	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at DESC").Find(&categories).Error; err != nil {
+	rows, err := r.queries.ListCategories(ctx, database.UUIDParam(userID))
+	if err != nil {
 		return nil, err
 	}
-	return categories, nil
+
+	items := make([]Category, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, categoryFromRow(row))
+	}
+	return items, nil
 }
 
 func (r *repository) GetByID(ctx context.Context, id, userID uuid.UUID) (*Category, error) {
-	var category Category
-	err := r.db.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&category).Error
+	row, err := r.queries.GetCategoryByID(ctx, sqlc.GetCategoryByIDParams{
+		ID:     database.UUIDParam(id),
+		UserID: database.UUIDParam(userID),
+	})
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if database.IsNoRows(err) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+	category := categoryFromRow(row)
 	return &category, nil
 }
 
 func (r *repository) Update(ctx context.Context, category *Category) error {
-	return r.db.WithContext(ctx).Save(category).Error
+	row, err := r.queries.UpdateCategory(ctx, sqlc.UpdateCategoryParams{
+		ID:     database.UUIDParam(category.ID),
+		UserID: database.UUIDParam(category.UserID),
+		Name:   category.Name,
+		Icon:   category.Icon,
+	})
+	if err != nil {
+		if database.IsNoRows(err) {
+			return apperrors.ErrNotFound
+		}
+		if database.IsUniqueViolation(err) {
+			return apperrors.ErrDuplicate
+		}
+		return err
+	}
+	*category = categoryFromRow(row)
+	return nil
 }
 
 func (r *repository) Delete(ctx context.Context, id, userID uuid.UUID) error {
-	result := r.db.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).Delete(&Category{})
-	if result.Error != nil {
-		return result.Error
+	rows, err := r.queries.SoftDeleteCategory(ctx, sqlc.SoftDeleteCategoryParams{
+		ID:     database.UUIDParam(id),
+		UserID: database.UUIDParam(userID),
+	})
+	if err != nil {
+		return err
 	}
-	if result.RowsAffected == 0 {
+	if rows == 0 {
 		return apperrors.ErrNotFound
 	}
 	return nil
 }
 
 func (r *repository) GetByName(ctx context.Context, name string, userID uuid.UUID) (*Category, error) {
-	var category Category
-	err := r.db.WithContext(ctx).Where("name ILIKE ? AND user_id = ?", name, userID).First(&category).Error
+	row, err := r.queries.GetCategoryByName(ctx, sqlc.GetCategoryByNameParams{
+		Name:   name,
+		UserID: database.UUIDParam(userID),
+	})
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if database.IsNoRows(err) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+	category := categoryFromRow(row)
 	return &category, nil
+}
+
+func categoryFromRow(row sqlc.Category) Category {
+	return Category{
+		ID:        database.UUIDValue(row.ID),
+		UserID:    database.UUIDValue(row.UserID),
+		Name:      row.Name,
+		Icon:      row.Icon,
+		CreatedAt: database.TimeValue(row.CreatedAt),
+		UpdatedAt: database.TimeValue(row.UpdatedAt),
+		DeletedAt: database.TimePtr(row.DeletedAt),
+	}
 }

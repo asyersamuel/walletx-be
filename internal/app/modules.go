@@ -14,6 +14,7 @@ import (
 	"walletx-be/internal/modules/telegram"
 	"walletx-be/internal/modules/transaction"
 	"walletx-be/internal/platform/cache"
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
 	mailpkg "walletx-be/internal/platform/mail"
 	"walletx-be/internal/platform/parser"
@@ -23,7 +24,6 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
-	"gorm.io/gorm"
 )
 
 // Modules aggregates every built business module and exposes the wired handlers
@@ -42,7 +42,7 @@ type Modules struct {
 // buildModules constructs all modules in dependency order and wires cross-module
 // capabilities through narrow interfaces.
 func buildModules(
-	db *gorm.DB,
+	queries *sqlc.Queries,
 	redisClient *redis.Client,
 	logger logger.Logger,
 	cfg *configs.Config,
@@ -75,12 +75,12 @@ func buildModules(
 	}
 
 	// Build leaf modules first.
-	authMod := auth.NewModule(db, logger, cfg.OAuth.ClientID, cfg.JWT.Secret, cfg.JWT.Expiration, blacklistRepo, oauthConfig)
-	categoryMod := category.NewModule(db, logger)
-	budgetMod := budget.NewModule(db, logger)
+	authMod := auth.NewModule(queries, logger, cfg.OAuth.ClientID, cfg.JWT.Secret, cfg.JWT.Expiration, blacklistRepo, oauthConfig)
+	categoryMod := category.NewModule(queries, logger)
+	budgetMod := budget.NewModule(queries, logger)
 
-	transactionMod := transaction.NewModule(db, logger, authMod.Repository, categoryMod.Repository, emailParser, dashCacheManager)
-	recurringMod := recurring.NewModule(db, logger, transactionMod.Repository, dashCacheManager)
+	transactionMod := transaction.NewModule(queries, logger, authMod.Repository, categoryMod.Repository, emailParser, dashCacheManager)
+	recurringMod := recurring.NewModule(queries, logger, transactionMod.Repository, dashCacheManager)
 	dashboardMod := dashboard.NewModule(budgetMod.Repository, budgetMod.SummaryRepository, cacheRepo, logger)
 
 	// Telegram requires a bot token and a Redis client.
@@ -103,7 +103,7 @@ func buildModules(
 
 	telegramMod := telegram.NewModule(cfg, bot, redisClient, authMod.Repository, categoryMod.Repository, transactionMod.Repository, budgetMod.Repository, emailSvc)
 
-	cronMod := cron.NewModule(db, logger, cfg.IMAP.Email, cfg.IMAP.Password, transactionMod.Processor, recurringMod.Service)
+	cronMod := cron.NewModule(queries, logger, cfg.IMAP.Server, cfg.IMAP.Email, cfg.IMAP.Password, transactionMod.Processor, recurringMod.Service)
 
 	return &Modules{
 		Auth:        authMod,

@@ -15,8 +15,8 @@ type RecurringProcessor interface {
 }
 
 type Handler struct {
-	healthRepo        HealthRepository
-	imapSyncer        IMAPSyncer
+	healthRepo         HealthRepository
+	imapSyncer         IMAPSyncer
 	recurringProcessor RecurringProcessor
 }
 
@@ -29,7 +29,7 @@ func NewHandler(healthRepo HealthRepository, imapSyncer IMAPSyncer, recurringPro
 }
 
 func (h *Handler) KeepAlive(c *gin.Context) {
-	if err := h.healthRepo.Ping(); err != nil {
+	if err := h.healthRepo.Ping(c.Request.Context()); err != nil {
 		logrus.WithError(err).Error("[Cron] Keep-alive query failed")
 		response.Error(c, "Database keep-alive failed")
 		return

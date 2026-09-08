@@ -21,9 +21,9 @@ type Config struct {
 }
 
 type IMAPConfig struct {
-    Email    string
-    Password string
-    Server   string
+	Email    string
+	Password string
+	Server   string
 }
 
 type GeminiConfig struct {
@@ -56,21 +56,13 @@ type RedisConfig struct {
 }
 
 type ServerConfig struct {
-	Port     string
-	Host     string
-	CertFile string
-	KeyFile  string
+	Port string
 }
 
 type DatabaseConfig struct {
-    // Preferred: full connection URL, e.g., postgres://user:pass@host:5432/db?sslmode=require
-    URL      string
-	Host     string
-	Port     string
-	User     string
-	Password string
-	DBName   string
-	SSLMode  string
+	// Use one URL for both local Supabase and hosted Supabase Postgres.
+	// Migrations are managed separately by the Supabase CLI.
+	URL string
 }
 
 type JWTConfig struct {
@@ -79,67 +71,45 @@ type JWTConfig struct {
 }
 
 type AppConfig struct {
-	DevMode bool // Development mode flag
+	DevMode bool   // Development mode flag
 	URL     string // Frontend or API Base URL, e.g. https://walletx-be.vercel.app
 }
 
 type MediaConfig struct {
-	StorageType        string // "local" or "supabase"
-	UploadDir          string // Base directory for uploads (local storage only)
-	MaxImageSize       int64  // Maximum image size in bytes
-	MaxVideoSize       int64  // Maximum video size in bytes
-	BaseURL            string // Base URL for serving files (local storage only)
-	
-	// Supabase Storage configuration
-	SupabaseStorageURL string // Supabase Storage API URL
-	SupabaseStorageKey string // Supabase anon/public key
-	SupabaseBucket     string // Storage bucket name
+	StorageType string // "local" or another storage adapter
+	UploadDir   string // Base directory for local uploads
+	BaseURL     string // Base URL for serving local files
 }
 
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port:     getEnv("PORT", "8443"),
-			Host:     getEnv("HOST", "localhost"),
-			CertFile: getEnv("CERT_FILE", "certs/cert.pem"),
-			KeyFile:  getEnv("KEY_FILE", "certs/key.pem"),
+			Port: getEnv("PORT", "8080"),
 		},
 		Database: DatabaseConfig{
-            // Preferred: full connection URL, e.g., postgres://user:pass@host:5432/db?sslmode=require
-            URL:      firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("DB_URL"), os.Getenv("SUPABASE_DB_URL")),
-			Host:     getEnv("DB_HOST", "localhost"),
-			Port:     getEnv("DB_PORT", "5432"),
-			User:     getEnv("DB_USER", "postgres"),
-			Password: getEnv("DB_PASSWORD", "password"),
-			DBName:   getEnv("DB_NAME", "backend_service"),
-            SSLMode:  getEnv("DB_SSLMODE", "require"),
+			URL: getEnv("DATABASE_URL", ""),
 		},
 		Redis: RedisConfig{
 			URL: getEnv("REDIS_URL", ""),
 		},
 		JWT: JWTConfig{
-			Secret:     getEnv("JWT_SECRET", "your-secret-key"),
+			Secret:     getEnv("JWT_SECRET", ""),
 			Expiration: getEnvAsInt("JWT_EXPIRATION", 24),
 		},
 		App: AppConfig{
 			DevMode: getEnvAsBool("DEV_MODE", false),
-			URL:     getEnv("APP_URL", "http://localhost:8443"),
+			URL:     getEnv("APP_URL", "http://localhost:8080"),
 		},
 		Media: MediaConfig{
-			StorageType:        getEnv("STORAGE_TYPE", "local"), // Default to local storage
-			UploadDir:          getEnv("UPLOAD_DIR", "uploads"),
-			MaxImageSize:       int64(getEnvAsInt("MAX_IMAGE_SIZE_MB", 5)) * 1024 * 1024,  // 5MB - best practice for small-scale apps
-			MaxVideoSize:       int64(getEnvAsInt("MAX_VIDEO_SIZE_MB", 50)) * 1024 * 1024, // 50MB - suitable for short clips
-			BaseURL:            getEnv("MEDIA_BASE_URL", "/uploads"),
-			SupabaseStorageURL: getEnv("SUPABASE_STORAGE_URL", ""),
-			SupabaseStorageKey: getEnv("SUPABASE_STORAGE_KEY", ""),
-			SupabaseBucket:     getEnv("SUPABASE_STORAGE_BUCKET", "media"),
+			StorageType: getEnv("STORAGE_TYPE", "local"),
+			UploadDir:   getEnv("UPLOAD_DIR", "uploads"),
+			BaseURL:     getEnv("MEDIA_BASE_URL", "/uploads"),
 		},
 		IMAP: IMAPConfig{
-            Email:    getEnv("IMAP_EMAIL", "walletxforyourfuture@gmail.com"),
-            Password: getEnv("IMAP_PASSWORD", ""), 
-            Server:   getEnv("IMAP_SERVER", "imap.gmail.com:993"),
-        },
+			Email:    getEnv("IMAP_EMAIL", ""),
+			Password: getEnv("IMAP_PASSWORD", ""),
+			Server:   getEnv("IMAP_SERVER", "imap.gmail.com:993"),
+		},
 		Gemini: GeminiConfig{
 			APIKey: getEnv("GEMINI_API_KEY", ""),
 		},
@@ -177,16 +147,6 @@ func getEnvAsInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
-}
-
-// firstNonEmpty returns the first non-empty string from the provided list
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func getEnvAsBool(key string, defaultValue bool) bool {

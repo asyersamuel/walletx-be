@@ -2,10 +2,10 @@ package auth
 
 import (
 	"walletx-be/internal/middleware"
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
 
 	"golang.org/x/oauth2"
-	"gorm.io/gorm"
 )
 
 // Module exposes the auth capability to the application wiring layer.
@@ -17,7 +17,7 @@ type Module struct {
 
 // NewModule wires auth dependencies: repository → service → handler.
 func NewModule(
-	db *gorm.DB,
+	queries *sqlc.Queries,
 	logger logger.Logger,
 	oauthClientID string,
 	jwtSecret string,
@@ -25,7 +25,7 @@ func NewModule(
 	blacklistRepo middleware.TokenBlacklistRepository,
 	oauthConfig *oauth2.Config,
 ) *Module {
-	userRepo := NewUserRepository(db, logger)
+	userRepo := NewUserRepository(queries, logger)
 	svc := NewService(userRepo, oauthClientID, jwtSecret, jwtExpiration, blacklistRepo)
 
 	return &Module{

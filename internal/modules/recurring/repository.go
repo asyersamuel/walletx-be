@@ -2,13 +2,13 @@ package recurring
 
 import (
 	"context"
-	"errors"
 
+	database "walletx-be/internal/platform/database"
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
-	"walletx-be/internal/shared/errors"
+	apperrors "walletx-be/internal/shared/errors"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // Repository is the persisted data access for recurring configs.
@@ -22,64 +22,118 @@ type Repository interface {
 }
 
 type repository struct {
-	db     *gorm.DB
-	logger logger.Logger
+	queries *sqlc.Queries
+	logger  logger.Logger
 }
 
-func NewRepository(db *gorm.DB, logger logger.Logger) Repository {
-	return &repository{
-		db:     db,
-		logger: logger,
-	}
+func NewRepository(queries *sqlc.Queries, logger logger.Logger) Repository {
+	return &repository{queries: queries, logger: logger}
 }
 
 func (r *repository) Create(ctx context.Context, config *Config) error {
-	err := r.db.WithContext(ctx).Create(config).Error
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return apperrors.ErrDuplicate
+	row, err := r.queries.CreateRecurringConfig(ctx, sqlc.CreateRecurringConfigParams{
+		UserID:      database.UUIDParam(config.UserID),
+		CategoryID:  database.NullableUUIDParam(config.CategoryID),
+		Amount:      config.Amount,
+		Frequency:   config.Frequency,
+		StartDate:   database.TimeParam(config.StartDate),
+		NextDueDate: database.TimeParam(config.NextDueDate),
+	})
+	if err != nil {
+		if database.IsUniqueViolation(err) {
+			return apperrors.ErrDuplicate
+		}
+		return err
 	}
-	return err
+	*config = configFromRow(row)
+	return nil
 }
 
 func (r *repository) List(ctx context.Context, userID uuid.UUID) ([]Config, error) {
-	var configs []Config
-	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at DESC").Find(&configs).Error; err != nil {
+	rows, err := r.queries.ListRecurringConfigs(ctx, database.UUIDParam(userID))
+	if err != nil {
 		return nil, err
 	}
-	return configs, nil
+
+	items := make([]Config, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, configFromRow(row))
+	}
+	return items, nil
 }
 
 func (r *repository) GetByID(ctx context.Context, id, userID uuid.UUID) (*Config, error) {
-	var config Config
-	err := r.db.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&config).Error
+	row, err := r.queries.GetRecurringConfigByID(ctx, sqlc.GetRecurringConfigByIDParams{
+		ID:     database.UUIDParam(id),
+		UserID: database.UUIDParam(userID),
+	})
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if database.IsNoRows(err) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+	config := configFromRow(row)
 	return &config, nil
 }
 
 func (r *repository) Update(ctx context.Context, config *Config) error {
-	return r.db.WithContext(ctx).Save(config).Error
+	row, err := r.queries.UpdateRecurringConfig(ctx, sqlc.UpdateRecurringConfigParams{
+		ID:          database.UUIDParam(config.ID),
+		UserID:      database.UUIDParam(config.UserID),
+		CategoryID:  database.NullableUUIDParam(config.CategoryID),
+		Amount:      config.Amount,
+		Frequency:   config.Frequency,
+		StartDate:   database.TimeParam(config.StartDate),
+		NextDueDate: database.TimeParam(config.NextDueDate),
+	})
+	if err != nil {
+		if database.IsNoRows(err) {
+			return apperrors.ErrNotFound
+		}
+		return err
+	}
+	*config = configFromRow(row)
+	return nil
 }
 
 func (r *repository) Delete(ctx context.Context, id, userID uuid.UUID) error {
-	result := r.db.WithContext(ctx).Unscoped().Where("id = ? AND user_id = ?", id, userID).Delete(&Config{})
-	if result.Error != nil {
-		return result.Error
+	rows, err := r.queries.DeleteRecurringConfig(ctx, sqlc.DeleteRecurringConfigParams{
+		ID:     database.UUIDParam(id),
+		UserID: database.UUIDParam(userID),
+	})
+	if err != nil {
+		return err
 	}
-	if result.RowsAffected == 0 {
+	if rows == 0 {
 		return apperrors.ErrNotFound
 	}
 	return nil
 }
 
 func (r *repository) GetDueConfigs(ctx context.Context) ([]Config, error) {
-	var configs []Config
-	if err := r.db.WithContext(ctx).Where("next_due_date <= NOW()").Find(&configs).Error; err != nil {
+	rows, err := r.queries.ListDueRecurringConfigs(ctx)
+	if err != nil {
 		return nil, err
 	}
-	return configs, nil
+
+	items := make([]Config, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, configFromRow(row))
+	}
+	return items, nil
+}
+
+func configFromRow(row sqlc.RecurringConfig) Config {
+	return Config{
+		ID:          database.UUIDValue(row.ID),
+		UserID:      database.UUIDValue(row.UserID),
+		CategoryID:  database.UUIDPtr(row.CategoryID),
+		Amount:      row.Amount,
+		Frequency:   row.Frequency,
+		StartDate:   database.TimeValue(row.StartDate),
+		NextDueDate: database.TimeValue(row.NextDueDate),
+		CreatedAt:   database.TimeValue(row.CreatedAt),
+		UpdatedAt:   database.TimeValue(row.UpdatedAt),
+	}
 }

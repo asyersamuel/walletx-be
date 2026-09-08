@@ -1,9 +1,8 @@
 package category
 
 import (
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
-
-	"gorm.io/gorm"
 )
 
 // Module exposes the category capability to the application wiring layer.
@@ -14,8 +13,8 @@ type Module struct {
 }
 
 // NewModule wires category dependencies: repository → service → handler.
-func NewModule(db *gorm.DB, logger logger.Logger) *Module {
-	repo := NewRepository(db, logger)
+func NewModule(queries *sqlc.Queries, logger logger.Logger) *Module {
+	repo := NewRepository(queries, logger)
 	svc := NewService(repo, logger)
 
 	return &Module{

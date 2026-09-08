@@ -45,11 +45,15 @@ dist/
 # Temporary files
 tmp/
 temp/ 
+.tmp/
+
+# Supabase local state
+supabase/.branches/
+supabase/.temp/
 
 certs/
 *.pem
 *.key
 
 .env
-.env.example
 env

@@ -5,31 +5,31 @@ import (
 
 	"walletx-be/internal/modules/category"
 	"walletx-be/internal/platform/cache"
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
 	"walletx-be/internal/platform/parser"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // Module exposes the transaction capability to the application wiring layer.
 type Module struct {
-	Handler   *Handler
-	Service   Service
-	Processor Processor
+	Handler    *Handler
+	Service    Service
+	Processor  Processor
 	Repository Repository
 }
 
 // NewModule wires transaction dependencies: repository + processor → service → handler.
 func NewModule(
-	db *gorm.DB,
+	queries *sqlc.Queries,
 	logger logger.Logger,
 	userStore UserStore,
 	categoryRepo category.Repository,
 	emailParser parser.EmailParser,
 	cacheManager cache.DashboardCacheManager,
 ) *Module {
-	repo := NewRepository(db, logger)
+	repo := NewRepository(queries, logger)
 	categoryLookup := categoryLookupAdapter{categoryRepo}
 	processor := NewProcessor(userStore, repo, categoryLookup, emailParser, cacheManager, logger)
 	svc := NewService(userStore, repo, categoryLookup, processor, cacheManager, logger)

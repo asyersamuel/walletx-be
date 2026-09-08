@@ -25,9 +25,9 @@ type imapService struct {
 	logger    logger.Logger
 }
 
-func NewIMAPService(email, password string, processor transaction.Processor, logger logger.Logger) IMAPSyncer {
+func NewIMAPService(server, email, password string, processor transaction.Processor, logger logger.Logger) IMAPSyncer {
 	return &imapService{
-		Server:    "imap.gmail.com:993",
+		Server:    server,
 		Email:     email,
 		Password:  password,
 		Processor: processor,

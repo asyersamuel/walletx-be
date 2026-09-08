@@ -2,17 +2,17 @@ package auth
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"walletx-be/internal/middleware"
+	database "walletx-be/internal/platform/database"
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
-	"walletx-be/internal/shared/errors"
+	apperrors "walletx-be/internal/shared/errors"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"gorm.io/gorm"
 )
 
 // UserRepository is the persisted data access for User aggregates.
@@ -26,73 +26,120 @@ type UserRepository interface {
 }
 
 type userRepository struct {
-	db     *gorm.DB
-	logger logger.Logger
+	queries *sqlc.Queries
+	logger  logger.Logger
 }
 
-func NewUserRepository(db *gorm.DB, logger logger.Logger) UserRepository {
-	return &userRepository{
-		db:     db,
-		logger: logger,
-	}
+func NewUserRepository(queries *sqlc.Queries, logger logger.Logger) UserRepository {
+	return &userRepository{queries: queries, logger: logger}
 }
 
 func (r *userRepository) Create(ctx context.Context, user *User) error {
-	err := r.db.WithContext(ctx).Create(user).Error
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return apperrors.ErrDuplicate
+	picture := user.Picture
+	row, err := r.queries.CreateUser(ctx, sqlc.CreateUserParams{
+		GoogleID: user.GoogleID,
+		Email:    user.Email,
+		Name:     user.Name,
+		Picture:  &picture,
+	})
+	if err != nil {
+		if database.IsUniqueViolation(err) {
+			return apperrors.ErrDuplicate
+		}
+		return err
 	}
-	return err
+	*user = userFromRow(row)
+	return nil
 }
 
 func (r *userRepository) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
-	var user User
-	if err := r.db.WithContext(ctx).First(&user, "id = ?", id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	row, err := r.queries.GetUserByID(ctx, database.UUIDParam(id))
+	if err != nil {
+		if database.IsNoRows(err) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+	user := userFromRow(row)
 	return &user, nil
 }
 
 func (r *userRepository) FindByEmail(ctx context.Context, email string) (*User, error) {
-	var user User
-	if err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	row, err := r.queries.GetUserByEmail(ctx, email)
+	if err != nil {
+		if database.IsNoRows(err) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+	user := userFromRow(row)
 	return &user, nil
 }
 
 func (r *userRepository) Update(ctx context.Context, user *User) error {
-	return r.db.WithContext(ctx).Save(user).Error
+	picture := user.Picture
+	row, err := r.queries.UpdateUser(ctx, sqlc.UpdateUserParams{
+		ID:             database.UUIDParam(user.ID),
+		GoogleID:       user.GoogleID,
+		Email:          user.Email,
+		Name:           user.Name,
+		Picture:        &picture,
+		TelegramChatID: user.TelegramChatID,
+	})
+	if err != nil {
+		if database.IsNoRows(err) {
+			return apperrors.ErrNotFound
+		}
+		if database.IsUniqueViolation(err) {
+			return apperrors.ErrDuplicate
+		}
+		return err
+	}
+	*user = userFromRow(row)
+	return nil
 }
 
 func (r *userRepository) FindByGoogleID(ctx context.Context, googleID string) (*User, error) {
-	var user User
-	err := r.db.WithContext(ctx).Where("google_id = ?", googleID).First(&user).Error
+	row, err := r.queries.GetUserByGoogleID(ctx, googleID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if database.IsNoRows(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
+	user := userFromRow(row)
 	return &user, nil
 }
 
 func (r *userRepository) FindByTelegramChatID(ctx context.Context, chatID string) (*User, error) {
-	var user User
-	err := r.db.WithContext(ctx).Where("telegram_chat_id = ?", chatID).First(&user).Error
+	row, err := r.queries.GetUserByTelegramChatID(ctx, &chatID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if database.IsNoRows(err) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+	user := userFromRow(row)
 	return &user, nil
+}
+
+func userFromRow(row sqlc.User) User {
+	picture := ""
+	if row.Picture != nil {
+		picture = *row.Picture
+	}
+
+	return User{
+		ID:             database.UUIDValue(row.ID),
+		GoogleID:       row.GoogleID,
+		Email:          row.Email,
+		Name:           row.Name,
+		Picture:        picture,
+		TelegramChatID: row.TelegramChatID,
+		CreatedAt:      database.TimeValue(row.CreatedAt),
+		UpdatedAt:      database.TimeValue(row.UpdatedAt),
+		DeletedAt:      database.TimePtr(row.DeletedAt),
+	}
 }
 
 // ─── Token blacklist ─────────────────────────────────────────────────────────
@@ -105,16 +152,12 @@ type tokenBlacklistRepository struct {
 // NewTokenBlacklistRepository returns a Redis-backed token blacklist store used
 // by both the auth service (on logout) and the JWT validator (on each request).
 func NewTokenBlacklistRepository(client *redis.Client, logger logger.Logger) middleware.TokenBlacklistRepository {
-	return &tokenBlacklistRepository{
-		client: client,
-		logger: logger,
-	}
+	return &tokenBlacklistRepository{client: client, logger: logger}
 }
 
 func (r *tokenBlacklistRepository) BlacklistToken(ctx context.Context, jti string, ttl time.Duration) error {
 	key := fmt.Sprintf("blacklist:%s", jti)
-	err := r.client.SetEx(ctx, key, "1", ttl).Err()
-	if err != nil {
+	if err := r.client.SetEx(ctx, key, "1", ttl).Err(); err != nil {
 		r.logger.WithFields(map[string]interface{}{"jti": jti, "error": err}).Error("Failed to blacklist token in Redis")
 		return err
 	}

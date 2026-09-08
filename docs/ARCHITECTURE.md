@@ -1,32 +1,68 @@
-# Arsitektur Proyek WalletX Backend
+# Arsitektur WalletX Backend
 
-Proyek WalletX Backend dibangun di atas arsitektur _Clean Architecture / Layered Architecture_ (Arsitektur Berlapis). Pendekatan ini memastikan pemisahan masalah (_separation of concerns_), skalabilitas, dan kemudahan pengujian.
+WalletX menggunakan Clean Architecture berlapis:
 
-## Pola Desain (Design Pattern)
+1. **Router/Handler** menerima request Gin dan mengembalikan response HTTP.
+2. **Service** menjalankan aturan bisnis.
+3. **Repository** memanggil query yang digenerate oleh `sqlc`.
+4. **SQL migration** di `supabase/migrations` menjadi sumber kebenaran schema.
+5. **Supabase PostgreSQL** menyimpan data aplikasi.
 
-Aplikasi ini dibagi menjadi beberapa lapisan utama:
-1. **Router & Handlers (Layer Presentasi)**: Menerima permintaan HTTP (via Gin), memvalidasi input, memanggil service layer, dan mengembalikan respons HTTP.
-2. **Services (Layer Bisnis/Logic)**: Berisi inti logika bisnis aplikasi (contoh: validasi logika, manipulasi data sebelum disimpan).
-3. **Repository (Layer Akses Data)**: Bertanggung jawab untuk komunikasi langsung dengan basis data menggunakan GORM. Layer ini memisahkan logika kueri DB dari logika bisnis.
-4. **Models (Domain/Entitas)**: Representasi dari struktur tabel basis data.
+## Alur request
 
-## Direktori dan Fungsinya
+```text
+Mobile App
+  -> Gin Router
+  -> Middleware JWT
+  -> Handler
+  -> Service
+  -> Repository
+  -> sqlc-generated Queries
+  -> pgx connection pool
+  -> Supabase PostgreSQL
+```
 
-- `cmd/server/main.go`: Entry point dari aplikasi. Menyambungkan koneksi DB, inisialisasi modul, dependency injection, cron jobs, dan router.
-- `configs/`: Memuat konfigurasi dari fail `.env` atau *environment variables* ke dalam struktur (struct) yang kuat (strongly-typed).
-- `internal/`: Kode sumber utama spesifik untuk aplikasi yang tidak boleh di-import oleh proyek lain.
-  - `models/`: Definisi entitas GORM seperti `User` dan `Transaction`.
-  - `database/`: Menginisialisasi koneksi antarmuka *database* PostgreSQL dan melakukan migrasi auto (AutoMigrate).
-  - `repository/`: Layer pembungkus (wrapper) query dasar ke basis data. Memiliki antarmuka (interface) di dalamnya.
-  - `services/`: Memproses *business logic*. Terdapat proses seperti autentikasi (`auth_service.go`), manajemen transaksi (`transaction_service.go`), dan parser (pengurai) teks (`parser_service.go`).
-  - `handlers/`: Titik masuk HTTP (Controller) yang menggunakan framework Gin.
-  - `router/`: Tempat mendaftarkan semua endpoint (`/api/...`) dan menyisipkan *middleware* (seperti CORS atau Autentikasi JWT).
-  - `middleware/`: Terdapat penyekat (interceptor) untuk mengecek dan memvalidasi JWT Token pengguna sebelum dieksekusi oleh Handlers.
-  - `services/`: Berisi business logic termasuk IMAP Service untuk menarik email dari server.
-  - `constants/`, `utils/`: Konstanta global dan fungsi-fungsi utilitas bersama (seperti generator string, waktu).
+GORM sudah tidak digunakan. File `internal/platform/database/sqlc/*.go` adalah
+hasil generate dan tidak boleh diedit manual. Query sumbernya berada di
+`internal/platform/database/queries/*.sql`.
 
-## Diagram Alur Eksekusi (User HTTP Request)
-Client (Mobile App) -> Router (Gin) -> Middleware (Validasi Token JWT) -> Handler -> Service (Business Logic) -> Repository -> PostgreSQL.
+## Struktur penting
 
-## Diagram Alur Eksekusi (Vercel Cron Jobs)
-Vercel Cron Jobs (HTTP) -> Handler `/api/v1/cron/` -> IMAP Service (Ambil Email Masuk) -> Transaction Service -> Parser Service -> Repository -> PostgreSQL.
+```text
+walletx-be/
+├── api/                         # Entry point Vercel
+├── cmd/server/                  # Entry point local
+├── configs/                     # Environment loader
+├── internal/
+│   ├── modules/                 # Handler, service, repository per fitur
+│   └── platform/database/
+│       ├── database.go          # pgxpool runtime connection
+│       ├── convert.go           # Mapping UUID/time pgtype
+│       ├── errors.go            # Mapping error PostgreSQL
+│       ├── queries/             # Query SQL untuk sqlc
+│       └── sqlc/                # Generated Go code
+├── supabase/
+│   ├── config.toml              # Supabase local via Docker
+│   ├── migrations/              # Schema versioning
+│   └── seed.sql                 # Seed opsional untuk local
+├── sqlc.yaml                    # Konfigurasi code generation
+└── .env.example                 # Template environment tanpa secret
+```
+
+## Database dan migration
+
+Supabase CLI menjalankan PostgreSQL lokal beserta service Supabase melalui
+Docker. API local terhubung ke port database `54322`; API production terhubung
+ke `DATABASE_URL` production. API tidak menjalankan migration ketika startup.
+
+Workflow lengkap tersedia di [DATABASE_MIGRATIONS.md](DATABASE_MIGRATIONS.md).
+
+## Catatan schema
+
+- `users`, `categories`, `transactions`, `category_limits`, dan
+  `recurring_configs` adalah tabel aplikasi.
+- `daily_expense_summary` adalah view untuk kebutuhan dashboard.
+- Delete kategori dan transaksi bersifat soft delete melalui `deleted_at`.
+- Delete budget dan recurring config bersifat hard delete.
+- Constraint unik dan check constraint didefinisikan di SQL migration, bukan di
+  struct Go.

@@ -1,20 +1,25 @@
 package cron
 
-import "gorm.io/gorm"
+import (
+	"context"
+
+	sqlc "walletx-be/internal/platform/database/sqlc"
+)
 
 // HealthRepository is a lightweight DB health-check capability.
 type HealthRepository interface {
-	Ping() error
+	Ping(ctx context.Context) error
 }
 
 type healthRepository struct {
-	db *gorm.DB
+	queries *sqlc.Queries
 }
 
-func NewHealthRepository(db *gorm.DB) HealthRepository {
-	return &healthRepository{db: db}
+func NewHealthRepository(queries *sqlc.Queries) HealthRepository {
+	return &healthRepository{queries: queries}
 }
 
-func (r *healthRepository) Ping() error {
-	return r.db.Exec("SELECT 1").Error
+func (r *healthRepository) Ping(ctx context.Context) error {
+	_, err := r.queries.Ping(ctx)
+	return err
 }

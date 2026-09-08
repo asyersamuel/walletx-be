@@ -2,14 +2,15 @@ package budget
 
 import (
 	"context"
-	"errors"
 	"time"
 
+	"walletx-be/internal/modules/category"
+	database "walletx-be/internal/platform/database"
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
-	"walletx-be/internal/shared/errors"
+	apperrors "walletx-be/internal/shared/errors"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // Repository is the persisted data access for budget limits.
@@ -22,11 +23,10 @@ type Repository interface {
 	GetActiveByUserID(ctx context.Context, userID uuid.UUID) ([]CategoryLimit, error)
 	FindByCategory(ctx context.Context, userID, categoryID uuid.UUID) (*CategoryLimit, error)
 	GetLimitReportByUserID(ctx context.Context, userID uuid.UUID) ([]LimitReport, error)
-	WithTx(tx *gorm.DB) Repository
 }
 
 // SummaryRepository provides read-only aggregates over the daily_expense_summary
-// table. It is shared by the budget progress calculation and the dashboard.
+// view. It is shared by the budget progress calculation and the dashboard.
 type SummaryRepository interface {
 	GetSummary(ctx context.Context, userID uuid.UUID, period string) ([]SummaryDTO, error)
 	GetDailyTotal(ctx context.Context, userID uuid.UUID, month int, year int) ([]DailyTotalDTO, error)
@@ -34,139 +34,180 @@ type SummaryRepository interface {
 }
 
 type repository struct {
-	db     *gorm.DB
-	logger logger.Logger
+	queries *sqlc.Queries
+	logger  logger.Logger
 }
 
-func NewRepository(db *gorm.DB, logger logger.Logger) Repository {
-	return &repository{
-		db:     db,
-		logger: logger,
-	}
+func NewRepository(queries *sqlc.Queries, logger logger.Logger) Repository {
+	return &repository{queries: queries, logger: logger}
 }
 
 func (r *repository) Create(ctx context.Context, limit *CategoryLimit) error {
-	err := r.db.WithContext(ctx).Create(limit).Error
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return apperrors.ErrDuplicate
+	row, err := r.queries.CreateCategoryLimit(ctx, sqlc.CreateCategoryLimitParams{
+		UserID:      database.UUIDParam(limit.UserID),
+		CategoryID:  database.UUIDParam(limit.CategoryID),
+		Period:      limit.Period,
+		LimitAmount: limit.LimitAmount,
+		IsActive:    limit.IsActive,
+	})
+	if err != nil {
+		if database.IsUniqueViolation(err) {
+			return apperrors.ErrDuplicate
+		}
+		return err
 	}
-	return err
+	*limit = categoryLimitFromRow(row)
+	return nil
 }
 
 func (r *repository) List(ctx context.Context, userID uuid.UUID) ([]CategoryLimit, error) {
-	var limits []CategoryLimit
-	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at DESC").Find(&limits).Error; err != nil {
+	rows, err := r.queries.ListCategoryLimits(ctx, database.UUIDParam(userID))
+	if err != nil {
 		return nil, err
 	}
-	return limits, nil
+
+	items := make([]CategoryLimit, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, categoryLimitFromRow(row))
+	}
+	return items, nil
 }
 
 func (r *repository) GetByID(ctx context.Context, id, userID uuid.UUID) (*CategoryLimit, error) {
-	var limit CategoryLimit
-	err := r.db.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&limit).Error
+	row, err := r.queries.GetCategoryLimitByID(ctx, sqlc.GetCategoryLimitByIDParams{
+		ID:     database.UUIDParam(id),
+		UserID: database.UUIDParam(userID),
+	})
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if database.IsNoRows(err) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+	limit := categoryLimitFromRow(row)
 	return &limit, nil
 }
 
 func (r *repository) Update(ctx context.Context, limit *CategoryLimit) error {
-	return r.db.WithContext(ctx).Save(limit).Error
+	row, err := r.queries.UpdateCategoryLimit(ctx, sqlc.UpdateCategoryLimitParams{
+		ID:          database.UUIDParam(limit.ID),
+		UserID:      database.UUIDParam(limit.UserID),
+		Period:      limit.Period,
+		LimitAmount: limit.LimitAmount,
+		IsActive:    limit.IsActive,
+	})
+	if err != nil {
+		if database.IsNoRows(err) {
+			return apperrors.ErrNotFound
+		}
+		return err
+	}
+	*limit = categoryLimitFromRow(row)
+	return nil
 }
 
 func (r *repository) Delete(ctx context.Context, id, userID uuid.UUID) error {
-	result := r.db.WithContext(ctx).Unscoped().Where("id = ? AND user_id = ?", id, userID).Delete(&CategoryLimit{})
-	if result.Error != nil {
-		return result.Error
+	rows, err := r.queries.DeleteCategoryLimit(ctx, sqlc.DeleteCategoryLimitParams{
+		ID:     database.UUIDParam(id),
+		UserID: database.UUIDParam(userID),
+	})
+	if err != nil {
+		return err
 	}
-	if result.RowsAffected == 0 {
+	if rows == 0 {
 		return apperrors.ErrNotFound
 	}
 	return nil
 }
 
 func (r *repository) GetActiveByUserID(ctx context.Context, userID uuid.UUID) ([]CategoryLimit, error) {
-	var limits []CategoryLimit
-	if err := r.db.WithContext(ctx).Preload("Category").Where("user_id = ? AND is_active = true", userID).Find(&limits).Error; err != nil {
+	rows, err := r.queries.ListActiveCategoryLimitsWithCategory(ctx, database.UUIDParam(userID))
+	if err != nil {
 		return nil, err
 	}
-	return limits, nil
+
+	items := make([]CategoryLimit, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, CategoryLimit{
+			ID:          database.UUIDValue(row.ID),
+			UserID:      database.UUIDValue(row.UserID),
+			CategoryID:  database.UUIDValue(row.CategoryID),
+			Period:      row.Period,
+			LimitAmount: row.LimitAmount,
+			IsActive:    row.IsActive,
+			CreatedAt:   database.TimeValue(row.CreatedAt),
+			UpdatedAt:   database.TimeValue(row.UpdatedAt),
+			Category: category.Category{
+				ID:     database.UUIDValue(row.CategoryID),
+				UserID: database.UUIDValue(row.UserID),
+				Name:   row.CategoryName,
+				Icon:   row.CategoryIcon,
+			},
+		})
+	}
+	return items, nil
 }
 
 func (r *repository) FindByCategory(ctx context.Context, userID, categoryID uuid.UUID) (*CategoryLimit, error) {
-	var limit CategoryLimit
-	err := r.db.WithContext(ctx).Where("user_id = ? AND category_id = ?", userID, categoryID).First(&limit).Error
+	row, err := r.queries.GetCategoryLimitByCategory(ctx, sqlc.GetCategoryLimitByCategoryParams{
+		UserID:     database.UUIDParam(userID),
+		CategoryID: database.UUIDParam(categoryID),
+	})
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if database.IsNoRows(err) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+	limit := categoryLimitFromRow(row)
 	return &limit, nil
 }
 
 func (r *repository) GetLimitReportByUserID(ctx context.Context, userID uuid.UUID) ([]LimitReport, error) {
-	var results []LimitReport
-
-	// Single efficient query: JOIN category_limits + categories, then
-	// LEFT JOIN transactions scoped to the current calendar month only.
-	// DATE_TRUNC('month', ...) on both sides ensures we compare month-boundaries
-	// without application-level date arithmetic, keeping timezone handling
-	// consistent with the PostgreSQL server's clock.
-	query := `
-		SELECT
-			c.name        AS category_name,
-			c.icon        AS category_icon,
-			cl.limit_amount,
-			COALESCE(SUM(t.amount), 0) AS total_spent
-		FROM category_limits cl
-		JOIN categories c ON cl.category_id = c.id
-		LEFT JOIN transactions t
-			ON  t.category_id = cl.category_id
-			AND t.user_id    = cl.user_id
-			AND t.deleted_at IS NULL
-			AND DATE_TRUNC('month', t.transaction_date) = DATE_TRUNC('month', CURRENT_DATE)
-		WHERE cl.user_id   = ?
-		  AND cl.is_active = true
-		  AND c.deleted_at IS NULL
-		GROUP BY c.id, c.name, c.icon, cl.id, cl.limit_amount
-		ORDER BY c.name ASC
-	`
-
-	if err := r.db.WithContext(ctx).Raw(query, userID).Scan(&results).Error; err != nil {
+	rows, err := r.queries.GetLimitReportByUserID(ctx, database.UUIDParam(userID))
+	if err != nil {
 		return nil, err
 	}
-	return results, nil
+
+	items := make([]LimitReport, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, LimitReport{
+			CategoryName: row.CategoryName,
+			CategoryIcon: row.CategoryIcon,
+			LimitAmount:  row.LimitAmount,
+			TotalSpent:   row.TotalSpent,
+		})
+	}
+	return items, nil
 }
 
-func (r *repository) WithTx(tx *gorm.DB) Repository {
-	if tx == nil {
-		return r
+func categoryLimitFromRow(row sqlc.CategoryLimit) CategoryLimit {
+	return CategoryLimit{
+		ID:          database.UUIDValue(row.ID),
+		UserID:      database.UUIDValue(row.UserID),
+		CategoryID:  database.UUIDValue(row.CategoryID),
+		Period:      row.Period,
+		LimitAmount: row.LimitAmount,
+		IsActive:    row.IsActive,
+		CreatedAt:   database.TimeValue(row.CreatedAt),
+		UpdatedAt:   database.TimeValue(row.UpdatedAt),
 	}
-	return &repository{db: tx}
 }
 
 // ─── Summary repository ───────────────────────────────────────────────────────
 
 type summaryRepository struct {
-	db     *gorm.DB
-	logger logger.Logger
+	queries *sqlc.Queries
+	logger  logger.Logger
 }
 
-func NewSummaryRepository(db *gorm.DB, logger logger.Logger) SummaryRepository {
-	return &summaryRepository{
-		db:     db,
-		logger: logger,
-	}
+func NewSummaryRepository(queries *sqlc.Queries, logger logger.Logger) SummaryRepository {
+	return &summaryRepository{queries: queries, logger: logger}
 }
 
 func (r *summaryRepository) GetSummary(ctx context.Context, userID uuid.UUID, period string) ([]SummaryDTO, error) {
-	var startDate time.Time
 	now := time.Now()
-
+	var startDate time.Time
 	switch period {
 	case "weekly":
 		weekday := int(now.Weekday())
@@ -179,62 +220,65 @@ func (r *summaryRepository) GetSummary(ctx context.Context, userID uuid.UUID, pe
 		startDate = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	}
 
-	query := `
-		SELECT
-			category_id,
-			SUM(total_amount)      AS total_amount,
-			SUM(transaction_count) AS transaction_count
-		FROM daily_expense_summary
-		WHERE user_id = ?
-		  AND day >= ?
-		GROUP BY category_id
-	`
-
-	var results []SummaryDTO
-	if err := r.db.WithContext(ctx).Raw(query, userID, startDate).Scan(&results).Error; err != nil {
+	rows, err := r.queries.GetSummaryByUserAndStartDate(ctx, sqlc.GetSummaryByUserAndStartDateParams{
+		UserID:    database.UUIDParam(userID),
+		StartDate: database.DateParam(startDate),
+	})
+	if err != nil {
 		return nil, err
 	}
-	return results, nil
+
+	items := make([]SummaryDTO, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, SummaryDTO{
+			CategoryID:       database.UUIDPtr(row.CategoryID),
+			TotalAmount:      row.TotalAmount,
+			TransactionCount: row.TransactionCount,
+		})
+	}
+	return items, nil
 }
 
 func (r *summaryRepository) GetSpendingByCategoryAndDateRange(ctx context.Context, userID uuid.UUID, startDate time.Time, endDate time.Time) ([]SummaryDTO, error) {
-	query := `
-		SELECT
-			category_id,
-			SUM(total_amount)      AS total_amount,
-			SUM(transaction_count) AS transaction_count
-		FROM daily_expense_summary
-		WHERE user_id = ?
-		  AND day >= ?
-		  AND day <= ?
-		GROUP BY category_id
-	`
-	var results []SummaryDTO
-	if err := r.db.WithContext(ctx).Raw(query, userID, startDate, endDate).Scan(&results).Error; err != nil {
+	rows, err := r.queries.GetSpendingByCategoryAndRange(ctx, sqlc.GetSpendingByCategoryAndRangeParams{
+		UserID:    database.UUIDParam(userID),
+		StartDate: database.DateParam(startDate),
+		EndDate:   database.DateParam(endDate),
+	})
+	if err != nil {
 		return nil, err
 	}
-	return results, nil
+
+	items := make([]SummaryDTO, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, SummaryDTO{
+			CategoryID:       database.UUIDPtr(row.CategoryID),
+			TotalAmount:      row.TotalAmount,
+			TransactionCount: row.TransactionCount,
+		})
+	}
+	return items, nil
 }
 
 func (r *summaryRepository) GetDailyTotal(ctx context.Context, userID uuid.UUID, month int, year int) ([]DailyTotalDTO, error) {
 	startDate := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
 	endDate := startDate.AddDate(0, 1, 0)
 
-	query := `
-		SELECT
-			day,
-			SUM(total_amount) AS total_amount
-		FROM daily_expense_summary
-		WHERE user_id = ?
-		  AND day >= ?
-		  AND day < ?
-		GROUP BY day
-		ORDER BY day ASC
-	`
-
-	var results []DailyTotalDTO
-	if err := r.db.WithContext(ctx).Raw(query, userID, startDate, endDate).Scan(&results).Error; err != nil {
+	rows, err := r.queries.GetDailyTotalByUserAndRange(ctx, sqlc.GetDailyTotalByUserAndRangeParams{
+		UserID:    database.UUIDParam(userID),
+		StartDate: database.DateParam(startDate),
+		EndDate:   database.DateParam(endDate),
+	})
+	if err != nil {
 		return nil, err
 	}
-	return results, nil
+
+	items := make([]DailyTotalDTO, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, DailyTotalDTO{
+			Day:         database.DateValue(row.Day),
+			TotalAmount: row.TotalAmount,
+		})
+	}
+	return items, nil
 }

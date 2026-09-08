@@ -5,9 +5,8 @@ import (
 
 	"walletx-be/internal/modules/transaction"
 	"walletx-be/internal/platform/cache"
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
-
-	"gorm.io/gorm"
 )
 
 // Module exposes the recurring capability to the application wiring layer.
@@ -20,12 +19,12 @@ type Module struct {
 // NewModule wires recurring dependencies: repository → service → handler.
 // The TransactionCreator capability is satisfied by the transaction module.
 func NewModule(
-	db *gorm.DB,
+	queries *sqlc.Queries,
 	logger logger.Logger,
 	txCreator transaction.Repository,
 	cacheManager cache.DashboardCacheManager,
 ) *Module {
-	repo := NewRepository(db, logger)
+	repo := NewRepository(queries, logger)
 	txCreatorAdapter := txCreatorAdapter{txCreator}
 	svc := NewService(repo, txCreatorAdapter, cacheManager, logger)
 

@@ -4,17 +4,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // Category represents a user-defined expense category (e.g., Food, Transport).
 type Category struct {
-	ID     uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	UserID uuid.UUID `gorm:"type:uuid;not null;index"                        json:"user_id"`
-	Name   string    `gorm:"not null"                                        json:"name"`
-	Icon   string    `gorm:"default:''"                                      json:"icon"`
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+	Name   string    `json:"name"`
+	Icon   string    `json:"icon"`
 
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"deleted_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	DeletedAt *time.Time `json:"deleted_at"`
 }

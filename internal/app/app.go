@@ -10,6 +10,7 @@ import (
 	"walletx-be/internal/modules/auth"
 	"walletx-be/internal/platform/cache"
 	"walletx-be/internal/platform/database"
+	sqlc "walletx-be/internal/platform/database/sqlc"
 	platformlogger "walletx-be/internal/platform/logger"
 
 	"github.com/redis/go-redis/v9"
@@ -25,10 +26,11 @@ type App struct {
 
 // Run initialises the platform, wires every module, and returns a ready App.
 func Run(cfg *configs.Config) (*App, error) {
-	db, err := database.Init(cfg.Database)
+	db, err := database.Init(cfg.Database.URL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
+	queries := sqlc.New(db)
 
 	logger := platformlogger.NewLogger()
 
@@ -47,8 +49,9 @@ func Run(cfg *configs.Config) (*App, error) {
 		blacklistRepo = auth.NewNoOpBlacklistRepository()
 	}
 
-	modules, err := buildModules(db, redisClient, logger, cfg, blacklistRepo)
+	modules, err := buildModules(queries, redisClient, logger, cfg, blacklistRepo)
 	if err != nil {
+		db.Close()
 		return nil, err
 	}
 
@@ -65,11 +68,8 @@ func Run(cfg *configs.Config) (*App, error) {
 
 	shutdownFunc := func(ctx context.Context) error {
 		cleanup()
-		sqlDB, err := db.DB()
-		if err != nil {
-			return fmt.Errorf("failed to get database instance: %w", err)
-		}
-		return sqlDB.Close()
+		db.Close()
+		return nil
 	}
 
 	return &App{
