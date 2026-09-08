@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"os"
-	"os/signal"	
+	"os/signal"
 	"syscall"
 
-	"walletx-be/core/bootstrap"
+	"walletx-be/configs"
+	"walletx-be/internal/app"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -24,15 +25,15 @@ func main() {
 		logrus.Warn(".env file not found, using default system variables")
 	}
 
-	cfg := bootstrap.LoadConfig()
+	cfg := configs.Load()
 
-	app, err := bootstrap.BuildApp(cfg)
+	appInstance, err := app.Run(cfg)
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to build application")
 	}
-	defer app.Cleanup()
+	defer appInstance.Cleanup()
 
-	port := app.Config.Server.Port
+	port := cfg.Server.Port
 	if port == "" {
 		port = "8080"
 	}
@@ -44,7 +45,7 @@ func main() {
 	}).Info("WalletX REST API Server is starting to listen")
 
 	go func() {
-		if err := app.Handler.(*gin.Engine).Run(":" + port); err != nil {
+		if err := appInstance.Handler.(*gin.Engine).Run(":" + port); err != nil {
 			logrus.WithError(err).Fatal("Failed to start server")
 		}
 	}()
@@ -55,7 +56,7 @@ func main() {
 
 	logrus.Info("Shutting down server...")
 	ctx := context.Background()
-	if err := app.ShutdownFunc(ctx); err != nil {
+	if err := appInstance.ShutdownFunc(ctx); err != nil {
 		logrus.WithError(err).Error("Error during shutdown")
 	}
 }

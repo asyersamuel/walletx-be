@@ -5,15 +5,16 @@ import (
 	"os"
 	"sync"
 
-	"walletx-be/core/bootstrap"
+	"walletx-be/configs"
+	"walletx-be/internal/app"
 
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
 )
 
 var (
-	app     http.Handler
-	appOnce sync.Once
+	httpHandler http.Handler
+	appOnce     sync.Once
 )
 
 func init() {
@@ -27,18 +28,18 @@ func initializeApp() {
 		logrus.Warn(".env file not found, using default system variables")
 	}
 
-	cfg := bootstrap.LoadConfig()
+	cfg := configs.Load()
 
-	appInstance, err := bootstrap.BuildApp(cfg)
+	appInstance, err := app.Run(cfg)
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to build application")
 		return
 	}
 
-	app = appInstance.Handler
+	httpHandler = appInstance.Handler
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
 	appOnce.Do(initializeApp)
-	app.ServeHTTP(w, r)
+	httpHandler.ServeHTTP(w, r)
 }
