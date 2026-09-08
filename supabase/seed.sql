@@ -1,3 +1,3 @@
 -- Optional local seed data goes here.
--- User-owned records are intentionally not seeded because users are created
--- by the Google authentication flow.
+-- User records are intentionally not seeded because they are created by the
+-- authentication flow.

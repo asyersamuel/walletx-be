@@ -1,68 +1,64 @@
-# Arsitektur WalletX Backend
+# Arsitektur Backend
 
-WalletX menggunakan Clean Architecture berlapis:
+Repository ini menggunakan struktur berlapis yang dapat diperluas:
 
-1. **Router/Handler** menerima request Gin dan mengembalikan response HTTP.
-2. **Service** menjalankan aturan bisnis.
-3. **Repository** memanggil query yang digenerate oleh `sqlc`.
-4. **SQL migration** di `supabase/migrations` menjadi sumber kebenaran schema.
-5. **Supabase PostgreSQL** menyimpan data aplikasi.
+1. Router menerima request melalui Gin.
+2. Middleware menangani concern lintas fitur seperti CORS dan JWT.
+3. Handler menerjemahkan request dan response HTTP.
+4. Service menjalankan aturan bisnis.
+5. Repository mengakses database melalui query typed hasil generate `sqlc`.
+6. Platform menyediakan koneksi database dan logger.
 
-## Alur request
+## Alur authentication
 
 ```text
-Mobile App
+Client
   -> Gin Router
-  -> Middleware JWT
-  -> Handler
-  -> Service
-  -> Repository
-  -> sqlc-generated Queries
+  -> Auth Handler
+  -> Auth Service
+  -> Auth Repository
+  -> sqlc Queries
   -> pgx connection pool
-  -> Supabase PostgreSQL
+  -> PostgreSQL
 ```
 
-GORM sudah tidak digunakan. File `internal/platform/database/sqlc/*.go` adalah
-hasil generate dan tidak boleh diedit manual. Query sumbernya berada di
-`internal/platform/database/queries/*.sql`.
+JWT yang diterbitkan oleh service divalidasi oleh middleware untuk route
+protected. Auth module dan middleware berbagi interface blacklist token yang
+sempit agar storage dapat diganti kemudian.
 
 ## Struktur penting
 
 ```text
-walletx-be/
-├── api/                         # Entry point Vercel
-├── cmd/server/                  # Entry point local
-├── configs/                     # Environment loader
+.
+├── api/                         # Entry point deployment
+├── cmd/server/                  # Entry point lokal
+├── configs/                     # Loader environment
 ├── internal/
-│   ├── modules/                 # Handler, service, repository per fitur
-│   └── platform/database/
-│       ├── database.go          # pgxpool runtime connection
-│       ├── convert.go           # Mapping UUID/time pgtype
-│       ├── errors.go            # Mapping error PostgreSQL
-│       ├── queries/             # Query SQL untuk sqlc
-│       └── sqlc/                # Generated Go code
-├── supabase/
-│   ├── config.toml              # Supabase local via Docker
-│   ├── migrations/              # Schema versioning
-│   └── seed.sql                 # Seed opsional untuk local
-├── sqlc.yaml                    # Konfigurasi code generation
-└── .env.example                 # Template environment tanpa secret
+│   ├── app/                     # Composition root dan router
+│   ├── middleware/              # CORS, JWT, recovery
+│   ├── modules/auth/            # Handler, service, repository, model
+│   ├── platform/database/
+│   │   ├── database.go          # pgxpool runtime connection
+│   │   ├── convert.go           # Mapping UUID/time
+│   │   ├── errors.go            # Mapping error PostgreSQL
+│   │   ├── queries/             # Sumber query SQL
+│   │   └── sqlc/                # Generated Go code
+│   ├── platform/logger/         # Logger adapter
+│   └── shared/                  # Utilities lintas module
+├── supabase/migrations/         # Versioned schema
+├── sqlc.yaml                    # Konfigurasi sqlc
+└── vercel.json                  # Deployment routing
 ```
 
-## Database dan migration
+`internal/app` adalah composition root: dependency dibuat di sana, lalu
+diserahkan ke module. Module tidak membuat koneksi database atau membaca
+environment secara langsung.
 
-Supabase CLI menjalankan PostgreSQL lokal beserta service Supabase melalui
-Docker. API local terhubung ke port database `54322`; API production terhubung
-ke `DATABASE_URL` production. API tidak menjalankan migration ketika startup.
+## Aturan pengembangan
 
-Workflow lengkap tersedia di [DATABASE_MIGRATIONS.md](DATABASE_MIGRATIONS.md).
-
-## Catatan schema
-
-- `users`, `categories`, `transactions`, `category_limits`, dan
-  `recurring_configs` adalah tabel aplikasi.
-- `daily_expense_summary` adalah view untuk kebutuhan dashboard.
-- Delete kategori dan transaksi bersifat soft delete melalui `deleted_at`.
-- Delete budget dan recurring config bersifat hard delete.
-- Constraint unik dan check constraint didefinisikan di SQL migration, bukan di
-  struct Go.
+- Migration SQL adalah sumber kebenaran schema.
+- Query ditulis di `internal/platform/database/queries`.
+- Jalankan `sqlc generate` setelah schema/query berubah.
+- Jangan mengedit file generated di `internal/platform/database/sqlc`.
+- Tambahkan feature baru sebagai module terpisah dan daftarkan dependency-nya
+  di `internal/app`.

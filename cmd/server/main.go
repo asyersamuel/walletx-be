@@ -42,7 +42,7 @@ func main() {
 		"port": port,
 		"env":  os.Getenv("GIN_MODE"),
 		"url":  "http://localhost:" + port,
-	}).Info("WalletX REST API Server is starting to listen")
+	}).Info("REST API server is starting to listen")
 
 	go func() {
 		if err := appInstance.Handler.(*gin.Engine).Run(":" + port); err != nil {

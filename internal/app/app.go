@@ -8,12 +8,9 @@ import (
 	"walletx-be/configs"
 	"walletx-be/internal/middleware"
 	"walletx-be/internal/modules/auth"
-	"walletx-be/internal/platform/cache"
 	"walletx-be/internal/platform/database"
 	sqlc "walletx-be/internal/platform/database/sqlc"
 	platformlogger "walletx-be/internal/platform/logger"
-
-	"github.com/redis/go-redis/v9"
 )
 
 // App is the assembled application instance returned to the entry point.
@@ -24,7 +21,7 @@ type App struct {
 	ShutdownFunc func(ctx context.Context) error
 }
 
-// Run initialises the platform, wires every module, and returns a ready App.
+// Run initialises the platform, wires the enabled modules, and returns a ready App.
 func Run(cfg *configs.Config) (*App, error) {
 	db, err := database.Init(cfg.Database.URL)
 	if err != nil {
@@ -34,22 +31,9 @@ func Run(cfg *configs.Config) (*App, error) {
 
 	logger := platformlogger.NewLogger()
 
-	var redisClient *redis.Client
-	rdb, err := cache.InitRedis(cfg.Redis)
-	if err != nil {
-		fmt.Printf("Redis not connected, token blacklisting disabled: %v\n", err)
-	} else {
-		redisClient = rdb
-	}
+	blacklistRepo := auth.NewInMemoryBlacklistRepository()
 
-	var blacklistRepo middleware.TokenBlacklistRepository
-	if redisClient != nil {
-		blacklistRepo = auth.NewTokenBlacklistRepository(redisClient, logger)
-	} else {
-		blacklistRepo = auth.NewNoOpBlacklistRepository()
-	}
-
-	modules, err := buildModules(queries, redisClient, logger, cfg, blacklistRepo)
+	modules, err := buildModules(queries, logger, cfg, blacklistRepo)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -58,16 +42,9 @@ func Run(cfg *configs.Config) (*App, error) {
 	validator := middleware.NewJWTValidator(cfg.JWT.Secret, blacklistRepo)
 	router := SetupRouter(modules, cfg, validator)
 
-	cleanup := func() {
-		if redisClient != nil {
-			if err := redisClient.Close(); err != nil {
-				fmt.Printf("Failed to close Redis connection: %v\n", err)
-			}
-		}
-	}
+	cleanup := func() {}
 
 	shutdownFunc := func(ctx context.Context) error {
-		cleanup()
 		db.Close()
 		return nil
 	}

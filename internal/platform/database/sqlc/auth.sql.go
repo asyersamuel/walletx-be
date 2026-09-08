@@ -18,7 +18,7 @@ insert into public.users (
 values (
     $1, $2, $3, $4
 )
-returning id, google_id, email, name, picture, telegram_chat_id,
+returning id, google_id, email, name, picture,
     created_at, updated_at, deleted_at
 `
 
@@ -43,7 +43,6 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Email,
 		&i.Name,
 		&i.Picture,
-		&i.TelegramChatID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -52,7 +51,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-select id, google_id, email, name, picture, telegram_chat_id,
+select id, google_id, email, name, picture,
     created_at, updated_at, deleted_at
 from public.users
 where email = $1
@@ -69,7 +68,6 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Email,
 		&i.Name,
 		&i.Picture,
-		&i.TelegramChatID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -78,7 +76,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByGoogleID = `-- name: GetUserByGoogleID :one
-select id, google_id, email, name, picture, telegram_chat_id,
+select id, google_id, email, name, picture,
     created_at, updated_at, deleted_at
 from public.users
 where google_id = $1
@@ -95,7 +93,6 @@ func (q *Queries) GetUserByGoogleID(ctx context.Context, googleID string) (User,
 		&i.Email,
 		&i.Name,
 		&i.Picture,
-		&i.TelegramChatID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -104,7 +101,7 @@ func (q *Queries) GetUserByGoogleID(ctx context.Context, googleID string) (User,
 }
 
 const getUserByID = `-- name: GetUserByID :one
-select id, google_id, email, name, picture, telegram_chat_id,
+select id, google_id, email, name, picture,
     created_at, updated_at, deleted_at
 from public.users
 where id = $1
@@ -121,33 +118,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.Email,
 		&i.Name,
 		&i.Picture,
-		&i.TelegramChatID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.DeletedAt,
-	)
-	return i, err
-}
-
-const getUserByTelegramChatID = `-- name: GetUserByTelegramChatID :one
-select id, google_id, email, name, picture, telegram_chat_id,
-    created_at, updated_at, deleted_at
-from public.users
-where telegram_chat_id = $1
-  and deleted_at is null
-limit 1
-`
-
-func (q *Queries) GetUserByTelegramChatID(ctx context.Context, telegramChatID *string) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByTelegramChatID, telegramChatID)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.GoogleID,
-		&i.Email,
-		&i.Name,
-		&i.Picture,
-		&i.TelegramChatID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -160,20 +130,18 @@ update public.users
 set google_id = $1,
     email = $2,
     name = $3,
-    picture = $4,
-    telegram_chat_id = $5
-where id = $6
-returning id, google_id, email, name, picture, telegram_chat_id,
+    picture = $4
+where id = $5
+returning id, google_id, email, name, picture,
     created_at, updated_at, deleted_at
 `
 
 type UpdateUserParams struct {
-	GoogleID       string      `json:"google_id"`
-	Email          string      `json:"email"`
-	Name           string      `json:"name"`
-	Picture        *string     `json:"picture"`
-	TelegramChatID *string     `json:"telegram_chat_id"`
-	ID             pgtype.UUID `json:"id"`
+	GoogleID string      `json:"google_id"`
+	Email    string      `json:"email"`
+	Name     string      `json:"name"`
+	Picture  *string     `json:"picture"`
+	ID       pgtype.UUID `json:"id"`
 }
 
 func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
@@ -182,7 +150,6 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		arg.Email,
 		arg.Name,
 		arg.Picture,
-		arg.TelegramChatID,
 		arg.ID,
 	)
 	var i User
@@ -192,7 +159,6 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.Email,
 		&i.Name,
 		&i.Picture,
-		&i.TelegramChatID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,

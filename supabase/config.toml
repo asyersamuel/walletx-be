@@ -16,11 +16,11 @@ enabled = true
 port = 54323
 
 [inbucket]
-enabled = true
+enabled = false
 port = 54324
 
 [storage]
-enabled = true
+enabled = false
 
 [auth]
 enabled = true
