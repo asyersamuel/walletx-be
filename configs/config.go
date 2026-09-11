@@ -24,18 +24,16 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	// Use one URL for both local Supabase and hosted Supabase Postgres.
-	// Migrations are managed separately by the Supabase CLI.
 	URL string
 }
 
 type JWTConfig struct {
 	Secret     string
-	Expiration int // in hours
+	Expiration int 
 }
 
 type AppConfig struct {
-	DevMode bool // Development mode flag
+	DevMode bool 
 }
 
 func Load() *Config {

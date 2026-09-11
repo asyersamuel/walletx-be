@@ -23,24 +23,24 @@ type App struct {
 
 // Run initialises the platform, wires the enabled modules, and returns a ready App.
 func Run(cfg *configs.Config) (*App, error) {
-	db, err := database.Init(cfg.Database.URL)
+	appLogger := platformlogger.NewLogger()
+
+	db, err := database.Init(cfg.Database.URL, appLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 	queries := sqlc.New(db)
 
-	logger := platformlogger.NewLogger()
-
 	blacklistRepo := auth.NewInMemoryBlacklistRepository()
 
-	modules, err := buildModules(queries, logger, cfg, blacklistRepo)
+	modules, err := buildModules(queries, appLogger, cfg, blacklistRepo)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
 
 	validator := middleware.NewJWTValidator(cfg.JWT.Secret, blacklistRepo)
-	router := SetupRouter(modules, cfg, validator)
+	router := SetupRouter(modules, cfg, validator, appLogger)
 
 	cleanup := func() {}
 

@@ -8,28 +8,25 @@ import (
 
 	"walletx-be/configs"
 	"walletx-be/internal/app"
+	platformlogger "walletx-be/internal/platform/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"github.com/sirupsen/logrus"
 )
 
-func init() {
-	logrus.SetFormatter(&logrus.JSONFormatter{})
-	logrus.SetOutput(os.Stdout)
-	logrus.SetLevel(logrus.InfoLevel)
-}
-
 func main() {
+	appLogger := platformlogger.NewLogger()
+
 	if err := godotenv.Load(); err != nil {
-		logrus.Warn(".env file not found, using default system variables")
+		appLogger.Warn(".env file not found, using default system variables")
 	}
 
 	cfg := configs.Load()
 
 	appInstance, err := app.Run(cfg)
 	if err != nil {
-		logrus.WithError(err).Fatal("Failed to build application")
+		appLogger.WithError(err).Error("Failed to build application")
+		return
 	}
 	defer appInstance.Cleanup()
 
@@ -38,25 +35,29 @@ func main() {
 		port = "8080"
 	}
 
-	logrus.WithFields(logrus.Fields{
+	appLogger.WithFields(map[string]interface{}{
 		"port": port,
 		"env":  os.Getenv("GIN_MODE"),
 		"url":  "http://localhost:" + port,
 	}).Info("REST API server is starting to listen")
 
+	serverErr := make(chan error, 1)
 	go func() {
-		if err := appInstance.Handler.(*gin.Engine).Run(":" + port); err != nil {
-			logrus.WithError(err).Fatal("Failed to start server")
-		}
+		serverErr <- appInstance.Handler.(*gin.Engine).Run(":" + port)
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	select {
+	case err := <-serverErr:
+		appLogger.WithError(err).Error("Failed to start server")
+		return
+	case <-quit:
+	}
 
-	logrus.Info("Shutting down server...")
+	appLogger.Info("Shutting down server...")
 	ctx := context.Background()
 	if err := appInstance.ShutdownFunc(ctx); err != nil {
-		logrus.WithError(err).Error("Error during shutdown")
+		appLogger.WithError(err).Error("Error during shutdown")
 	}
 }

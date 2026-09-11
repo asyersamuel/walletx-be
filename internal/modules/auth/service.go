@@ -19,8 +19,7 @@ type UserStore interface {
 	Update(ctx context.Context, user *User) error
 }
 
-// Service encapsulates authentication concerns: Google SSO sign-in, JWT
-// issuance, and token invalidation.
+// Service encapsulates authentication concerns: Google SSO sign-in, JWT issuance, and token invalidation.
 type Service interface {
 	ProcessGoogleAuth(ctx context.Context, input GoogleAuthInput) (*User, bool, error)
 	GenerateJWT(user *User) (string, error)

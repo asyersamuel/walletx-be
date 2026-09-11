@@ -2,37 +2,33 @@ package api
 
 import (
 	"net/http"
-	"os"
 	"sync"
 
 	"walletx-be/configs"
 	"walletx-be/internal/app"
+	platformlogger "walletx-be/internal/platform/logger"
 
 	"github.com/joho/godotenv"
-	"github.com/sirupsen/logrus"
 )
 
 var (
-	httpHandler http.Handler
-	appOnce     sync.Once
+	httpHandler       http.Handler
+	initializationErr error
+	appOnce           sync.Once
+	appLogger         = platformlogger.NewLogger()
 )
-
-func init() {
-	logrus.SetFormatter(&logrus.JSONFormatter{})
-	logrus.SetOutput(os.Stdout)
-	logrus.SetLevel(logrus.InfoLevel)
-}
 
 func initializeApp() {
 	if err := godotenv.Load(); err != nil {
-		logrus.Warn(".env file not found, using default system variables")
+		appLogger.Warn(".env file not found, using default system variables")
 	}
 
 	cfg := configs.Load()
 
 	appInstance, err := app.Run(cfg)
 	if err != nil {
-		logrus.WithError(err).Fatal("Failed to build application")
+		initializationErr = err
+		appLogger.WithError(err).Error("Failed to build application")
 		return
 	}
 
@@ -41,5 +37,9 @@ func initializeApp() {
 
 func Handler(w http.ResponseWriter, r *http.Request) {
 	appOnce.Do(initializeApp)
+	if initializationErr != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	httpHandler.ServeHTTP(w, r)
 }

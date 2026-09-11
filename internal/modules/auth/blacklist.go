@@ -9,15 +9,12 @@ import (
 )
 
 // inMemoryBlacklistRepository keeps revoked tokens local to one API process.
-// It keeps the auth-only baseline free from an external cache dependency.
 type inMemoryBlacklistRepository struct {
 	mu     sync.RWMutex
 	tokens map[string]time.Time
 }
 
-// NewInMemoryBlacklistRepository creates a token blacklist for the current
-// process. A distributed blacklist can be introduced later without changing
-// the auth service or middleware interfaces.
+// NewInMemoryBlacklistRepository creates a token blacklist for the current process. 
 func NewInMemoryBlacklistRepository() middleware.TokenBlacklistRepository {
 	return &inMemoryBlacklistRepository{tokens: make(map[string]time.Time)}
 }

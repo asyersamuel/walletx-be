@@ -9,9 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// ParseUserID extracts the authenticated user id from the Gin context populated
-// by the JWT middleware. It writes the appropriate error response and returns
-// false when the id is missing or malformed.
+// ParseUserID extracts the authenticated user id from the Gin context populated by the JWT middleware.
 func ParseUserID(c *gin.Context) (uuid.UUID, bool) {
 	val, exists := c.Get("user_id")
 	if !exists {

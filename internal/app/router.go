@@ -4,16 +4,21 @@ import (
 	"walletx-be/configs"
 	"walletx-be/internal/middleware"
 	"walletx-be/internal/modules/auth"
+	platformlogger "walletx-be/internal/platform/logger"
 	"walletx-be/internal/shared/response"
 
 	"github.com/gin-gonic/gin"
 )
 
 // SetupRouter builds the Gin engine and registers the enabled routes.
-func SetupRouter(modules *Modules, cfg *configs.Config, validator middleware.TokenValidator) *gin.Engine {
-	r := gin.Default()
+func SetupRouter(modules *Modules, cfg *configs.Config, validator middleware.TokenValidator, appLogger platformlogger.Logger) *gin.Engine {
+	r := gin.New()
 
-	r.Use(middleware.CORS())
+	r.Use(
+		middleware.RequestLogger(appLogger),
+		middleware.Recovery(appLogger),
+		middleware.CORS(),
+	)
 
 	api := r.Group("/api/v1")
 	{

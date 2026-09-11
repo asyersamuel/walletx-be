@@ -49,8 +49,6 @@ func NewJWTValidator(secret string, blacklistRepo TokenBlacklistRepository) Toke
 }
 
 // AuthMiddleware is the cross-cutting JWT authentication guard placed around
-// all protected routes. It populates the Gin context with the authenticated
-// user's identity (user_id, email, role).
 func AuthMiddleware(validator TokenValidator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenString := extractToken(c)

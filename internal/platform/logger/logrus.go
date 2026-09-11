@@ -1,12 +1,12 @@
 package logger
 
 import (
+	"os"
+
 	"github.com/sirupsen/logrus"
 )
 
 // Logger is the minimal logging interface used across the application.
-// It abstracts the concrete logging library so business modules do not
-// depend directly on logrus.
 type Logger interface {
 	Info(msg string)
 	Warn(msg string)
@@ -17,11 +17,22 @@ type Logger interface {
 	WithFields(fields map[string]interface{}) Logger
 }
 
+func init() {
+	Configure()
+}
+
+// Configure sets the process-wide logging defaults used by the adapter.
+func Configure() {
+	logrus.SetFormatter(&logrus.JSONFormatter{})
+	logrus.SetOutput(os.Stdout)
+	logrus.SetLevel(logrus.InfoLevel)
+}
+
 type logrusAdapter struct {
 	entry *logrus.Entry
 }
 
-func NewLogger() *logrusAdapter {
+func NewLogger() Logger {
 	return &logrusAdapter{entry: logrus.NewEntry(logrus.StandardLogger())}
 }
 

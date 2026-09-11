@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"time"
 
+	platformlogger "walletx-be/internal/platform/logger"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Init opens the runtime connection pool. Schema changes are deliberately not
-// performed here; Supabase CLI migrations are the single source of truth for
-// schema changes.
-func Init(databaseURL string) (*pgxpool.Pool, error) {
+// Init opens the runtime connection pool. 
+func Init(databaseURL string, appLogger platformlogger.Logger) (*pgxpool.Pool, error) {
 	if databaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is not set")
 	}
@@ -22,9 +22,6 @@ func Init(databaseURL string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("failed to parse DATABASE_URL: %w", err)
 	}
 
-	// Supabase transaction pooler does not support prepared statements in the
-	// same way as a direct PostgreSQL connection. Simple protocol works for both
-	// the local Supabase database and the hosted pooler connection.
 	poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 
 	const maxRetries = 10
@@ -46,7 +43,11 @@ func Init(databaseURL string) (*pgxpool.Pool, error) {
 		}
 
 		wait := time.Duration(attempt) * time.Second
-		fmt.Printf("Database connection failed (attempt %d/%d), retrying in %v...\n", attempt, maxRetries, wait)
+		appLogger.WithFields(map[string]interface{}{
+			"attempt":      attempt,
+			"max_attempts": maxRetries,
+			"retry_in":     wait.String(),
+		}).Warn("Database connection failed; retrying")
 		time.Sleep(wait)
 	}
 

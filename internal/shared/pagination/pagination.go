@@ -11,7 +11,7 @@ type Meta struct {
 // CalculateMeta calculates pagination metadata from total count, limit, and offset
 func CalculateMeta(total int, limit int, offset int) Meta {
 	if limit <= 0 {
-		limit = 20 // Default limit
+		limit = 20
 	}
 
 	page := (offset / limit) + 1
@@ -19,7 +19,7 @@ func CalculateMeta(total int, limit int, offset int) Meta {
 		page = 1
 	}
 
-	totalPages := (total + limit - 1) / limit // Ceiling division
+	totalPages := (total + limit - 1) / limit
 	if totalPages == 0 {
 		totalPages = 1
 	}
