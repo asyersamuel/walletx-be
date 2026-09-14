@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Init opens the runtime connection pool. 
+// Init opens the runtime connection pool.
 func Init(databaseURL string, appLogger platformlogger.Logger) (*pgxpool.Pool, error) {
 	if databaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is not set")

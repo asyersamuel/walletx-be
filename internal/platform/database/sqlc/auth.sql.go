@@ -100,6 +100,30 @@ func (q *Queries) GetUserByGoogleID(ctx context.Context, googleID string) (User,
 	return i, err
 }
 
+const getUserByGoogleIDAny = `-- name: GetUserByGoogleIDAny :one
+select id, google_id, email, name, picture,
+    created_at, updated_at, deleted_at
+from public.users
+where google_id = $1
+limit 1
+`
+
+func (q *Queries) GetUserByGoogleIDAny(ctx context.Context, googleID string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByGoogleIDAny, googleID)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.GoogleID,
+		&i.Email,
+		&i.Name,
+		&i.Picture,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getUserByID = `-- name: GetUserByID :one
 select id, google_id, email, name, picture,
     created_at, updated_at, deleted_at
@@ -152,6 +176,38 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		arg.Picture,
 		arg.ID,
 	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.GoogleID,
+		&i.Email,
+		&i.Name,
+		&i.Picture,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const updateUserGoogleProfile = `-- name: UpdateUserGoogleProfile :one
+update public.users
+set name = $1,
+    picture = $2
+where id = $3
+  and deleted_at is null
+returning id, google_id, email, name, picture,
+    created_at, updated_at, deleted_at
+`
+
+type UpdateUserGoogleProfileParams struct {
+	Name    string      `json:"name"`
+	Picture *string     `json:"picture"`
+	ID      pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateUserGoogleProfile(ctx context.Context, arg UpdateUserGoogleProfileParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserGoogleProfile, arg.Name, arg.Picture, arg.ID)
 	var i User
 	err := row.Scan(
 		&i.ID,

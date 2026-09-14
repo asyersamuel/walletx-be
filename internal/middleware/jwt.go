@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	ErrInvalidToken   = errors.New("invalid or expired token")
-	ErrTokenRevoked   = errors.New("token has been revoked")
-	ErrInvalidClaims  = errors.New("invalid token claims")
+	ErrInvalidToken  = errors.New("invalid or expired token")
+	ErrTokenRevoked  = errors.New("token has been revoked")
+	ErrInvalidClaims = errors.New("invalid token claims")
 )
 
 // TokenClaims holds the parsed claims extracted from a JWT.
@@ -37,8 +37,8 @@ type TokenBlacklistRepository interface {
 }
 
 type jwtValidator struct {
-	secret         string
-	blacklistRepo  TokenBlacklistRepository
+	secret        string
+	blacklistRepo TokenBlacklistRepository
 }
 
 func NewJWTValidator(secret string, blacklistRepo TokenBlacklistRepository) TokenValidator {

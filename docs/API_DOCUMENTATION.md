@@ -80,6 +80,71 @@ Authorization: Bearer <internal-jwt>
 
 Response sukses adalah `204 No Content`.
 
+## Users
+
+Semua endpoint users membutuhkan JWT valid:
+
+```http
+Authorization: Bearer <internal-jwt>
+```
+
+User selalu diambil dari claim token; tidak ada user ID di path atau body.
+
+### `PUT /users/me`
+
+Memperbarui profil user yang sedang login. Hanya `name` dan `picture` yang
+boleh diubah. Field lain (`email`, `google_id`, timestamp) ditolak bila
+dikirim. `picture` boleh dikosongkan (`""`) untuk menghapus avatar; bila
+diisi harus URL `http`/`https` maksimal 2048 karakter. Unknown field
+menghasilkan `400`.
+
+```http
+PUT /api/v1/users/me
+Content-Type: application/json
+
+{
+  "name": "Updated Name",
+  "picture": "https://example.com/new-avatar.jpg"
+}
+```
+
+Response sukses `200 OK`:
+
+```json
+{
+  "status": "success",
+  "message": "User profile updated successfully",
+  "data": {
+    "user": {
+      "id": "uuid",
+      "google_id": "provider-user-id",
+      "email": "user@example.com",
+      "name": "Updated Name",
+      "picture": "https://example.com/new-avatar.jpg",
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  },
+  "timestamp": "2026-01-01T00:00:00Z"
+}
+```
+
+Error: `400` validasi gagal, `401` token tidak valid, `404` user tidak
+ditemukan/sudah dihapus, `500` kegagalan server.
+
+### `DELETE /users/me`
+
+Menghapus akun user yang sedang login secara soft delete (`deleted_at` terisi)
+dan me-revoke token yang dipakai pada request. Operasi idempotent: request
+ulang tidak mengembalikan error.
+
+```http
+DELETE /api/v1/users/me
+```
+
+Response sukses `204 No Content` tanpa body. Error: `401` token tidak valid,
+`500` kegagalan server.
+
 ## Authentication untuk endpoint protected
 
 Simpan JWT secara aman di client dan kirimkan pada setiap endpoint protected:
@@ -99,6 +164,8 @@ akan hilang ketika proses restart.
 - `204 No Content` — request berhasil tanpa body.
 - `400 Bad Request` — input tidak valid.
 - `401 Unauthorized` — token tidak ada atau tidak valid.
+- `404 Not Found` — resource tidak ditemukan.
+- `409 Conflict` — konflik data (duplicate).
 - `500 Internal Server Error` — kesalahan server.
 
 Contoh error:

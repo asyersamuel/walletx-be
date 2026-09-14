@@ -29,11 +29,11 @@ type DatabaseConfig struct {
 
 type JWTConfig struct {
 	Secret     string
-	Expiration int 
+	Expiration int
 }
 
 type AppConfig struct {
-	DevMode bool 
+	DevMode bool
 }
 
 func Load() *Config {

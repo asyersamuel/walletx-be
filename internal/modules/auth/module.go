@@ -5,6 +5,7 @@ import (
 	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/oauth2"
 )
 
@@ -17,19 +18,20 @@ type Module struct {
 
 // NewModule wires auth dependencies: repository → service → handler.
 func NewModule(
+	pool *pgxpool.Pool,
 	queries *sqlc.Queries,
-	logger logger.Logger,
+	appLogger logger.Logger,
 	oauthClientID string,
 	jwtSecret string,
 	jwtExpiration int,
 	blacklistRepo middleware.TokenBlacklistRepository,
 	oauthConfig *oauth2.Config,
 ) *Module {
-	userRepo := NewUserRepository(queries, logger)
-	svc := NewService(userRepo, oauthClientID, jwtSecret, jwtExpiration, blacklistRepo)
+	userRepo := NewUserRepository(pool, queries, appLogger)
+	svc := NewService(userRepo, appLogger, oauthClientID, jwtSecret, jwtExpiration, blacklistRepo)
 
 	return &Module{
-		Handler:    NewHandler(svc, oauthConfig),
+		Handler:    NewHandler(svc, appLogger, oauthConfig),
 		Service:    svc,
 		Repository: userRepo,
 	}

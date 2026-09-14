@@ -14,7 +14,7 @@ type inMemoryBlacklistRepository struct {
 	tokens map[string]time.Time
 }
 
-// NewInMemoryBlacklistRepository creates a token blacklist for the current process. 
+// NewInMemoryBlacklistRepository creates a token blacklist for the current process.
 func NewInMemoryBlacklistRepository() middleware.TokenBlacklistRepository {
 	return &inMemoryBlacklistRepository{tokens: make(map[string]time.Time)}
 }

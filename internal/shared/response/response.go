@@ -13,11 +13,11 @@ import (
 // Following JSON:API specification best practices
 type APIResponse struct {
 	Status    string      `json:"status"`              // "success", "error", or "fail"
-	Message   string      `json:"message"`              // Human-readable message
+	Message   string      `json:"message"`             // Human-readable message
 	Data      interface{} `json:"data,omitempty"`      // Response payload (omitted if null)
-	Errors    interface{} `json:"errors,omitempty"`     // Error details (only for errors/failures)
-	Meta      interface{} `json:"meta,omitempty"`       // Metadata (pagination, etc.)
-	Timestamp string      `json:"timestamp,omitempty"`   // Response timestamp (ISO 8601)
+	Errors    interface{} `json:"errors,omitempty"`    // Error details (only for errors/failures)
+	Meta      interface{} `json:"meta,omitempty"`      // Metadata (pagination, etc.)
+	Timestamp string      `json:"timestamp,omitempty"` // Response timestamp (ISO 8601)
 }
 
 // Response status constants

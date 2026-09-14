@@ -33,7 +33,7 @@ func Run(cfg *configs.Config) (*App, error) {
 
 	blacklistRepo := auth.NewInMemoryBlacklistRepository()
 
-	modules, err := buildModules(queries, appLogger, cfg, blacklistRepo)
+	modules, err := buildModules(db, queries, appLogger, cfg, blacklistRepo)
 	if err != nil {
 		db.Close()
 		return nil, err

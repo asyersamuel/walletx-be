@@ -1,9 +1,13 @@
 package auth
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
+	"walletx-be/internal/platform/logger"
+	apperrors "walletx-be/internal/shared/errors"
 	"walletx-be/internal/shared/response"
 
 	"github.com/gin-gonic/gin"
@@ -11,13 +15,15 @@ import (
 )
 
 type Handler struct {
-	service    Service
+	service     Service
+	logger      logger.Logger
 	oauthConfig *oauth2.Config
 }
 
-func NewHandler(service Service, oauthConfig *oauth2.Config) *Handler {
+func NewHandler(service Service, appLogger logger.Logger, oauthConfig *oauth2.Config) *Handler {
 	return &Handler{
-		service:    service,
+		service:     service,
+		logger:      appLogger,
 		oauthConfig: oauthConfig,
 	}
 }
@@ -25,8 +31,20 @@ func NewHandler(service Service, oauthConfig *oauth2.Config) *Handler {
 func (h *Handler) HandleGoogleAuth(c *gin.Context) {
 	var input GoogleAuthInput
 
-	if err := c.ShouldBindJSON(&input); err != nil {
-		response.FailWithDetails(c, "Invalid request body", err.Error())
+	if c.Request.Body == nil {
+		response.Fail(c, "Request body is required")
+		return
+	}
+
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		response.Fail(c, "Invalid request body")
+		return
+	}
+
+	if strings.TrimSpace(input.IDToken) == "" {
+		response.Fail(c, "id_token is required")
 		return
 	}
 
@@ -68,12 +86,26 @@ func (h *Handler) GoogleCallbackTest(c *gin.Context) {
 func (h *Handler) processAuthLogic(c *gin.Context, input GoogleAuthInput) {
 	user, isNewUser, err := h.service.ProcessGoogleAuth(c.Request.Context(), input)
 	if err != nil {
-		response.ErrorWithDetails(c, "Failed to process authentication", err.Error())
+		switch {
+		case errors.Is(err, apperrors.ErrInvalidInput):
+			h.logger.WithField("operation", "google_auth").Warn("Invalid authentication request")
+			response.Fail(c, "Invalid authentication request")
+		case errors.Is(err, apperrors.ErrUnauthorized):
+			h.logger.WithField("operation", "google_auth").Warn("Google token validation failed")
+			response.Unauthorized(c, "Invalid or expired Google token")
+		case errors.Is(err, apperrors.ErrConflict), errors.Is(err, apperrors.ErrAccountDeleted), errors.Is(err, apperrors.ErrDuplicate):
+			h.logger.WithField("operation", "google_auth").Warn("Account conflict during authentication")
+			response.FailWithStatus(c, http.StatusConflict, "Account conflict")
+		default:
+			h.logger.WithError(err).WithField("operation", "google_auth").Error("Authentication failed")
+			response.Error(c, "Failed to process authentication")
+		}
 		return
 	}
 
 	internalToken, err := h.service.GenerateJWT(user)
 	if err != nil {
+		h.logger.WithError(err).WithField("operation", "jwt_generation").Error("Failed to generate internal JWT")
 		response.Error(c, "Failed to generate internal token")
 		return
 	}
@@ -85,9 +117,9 @@ func (h *Handler) processAuthLogic(c *gin.Context, input GoogleAuthInput) {
 		statusCode = http.StatusCreated
 	}
 
-	response.SuccessWithStatus(c, statusCode, gin.H{
-		"user":  user,
-		"token": internalToken,
+	response.SuccessWithStatus(c, statusCode, GoogleAuthResponse{
+		User:  toUserResponse(user),
+		Token: internalToken,
 	}, message)
 }
 

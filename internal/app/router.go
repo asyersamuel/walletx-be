@@ -4,6 +4,7 @@ import (
 	"walletx-be/configs"
 	"walletx-be/internal/middleware"
 	"walletx-be/internal/modules/auth"
+	"walletx-be/internal/modules/users"
 	platformlogger "walletx-be/internal/platform/logger"
 	"walletx-be/internal/shared/response"
 
@@ -32,6 +33,7 @@ func SetupRouter(modules *Modules, cfg *configs.Config, validator middleware.Tok
 		protected.Use(middleware.AuthMiddleware(validator))
 		{
 			auth.RegisterProtectedRoutes(protected, modules.Auth.Handler)
+			users.RegisterProtectedRoutes(protected, modules.Users.Handler)
 		}
 	}
 

@@ -41,3 +41,19 @@ set google_id = sqlc.arg(google_id),
 where id = sqlc.arg(id)
 returning id, google_id, email, name, picture,
     created_at, updated_at, deleted_at;
+
+-- name: GetUserByGoogleIDAny :one
+select id, google_id, email, name, picture,
+    created_at, updated_at, deleted_at
+from public.users
+where google_id = sqlc.arg(google_id)
+limit 1;
+
+-- name: UpdateUserGoogleProfile :one
+update public.users
+set name = sqlc.arg(name),
+    picture = sqlc.narg(picture)
+where id = sqlc.arg(id)
+  and deleted_at is null
+returning id, google_id, email, name, picture,
+    created_at, updated_at, deleted_at;

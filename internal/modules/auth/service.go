@@ -2,10 +2,14 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"walletx-be/internal/middleware"
+	"walletx-be/internal/platform/logger"
+	apperrors "walletx-be/internal/shared/errors"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -15,8 +19,10 @@ import (
 // UserStore is the narrow capability the auth service needs from persistence.
 type UserStore interface {
 	FindByGoogleID(ctx context.Context, googleID string) (*User, error)
-	Create(ctx context.Context, user *User) error
-	Update(ctx context.Context, user *User) error
+	FindByGoogleIDAny(ctx context.Context, googleID string) (*User, error)
+	FindByEmail(ctx context.Context, email string) (*User, error)
+	CreateWithDefaultCategories(ctx context.Context, user *User) error
+	UpdateGoogleProfile(ctx context.Context, userID uuid.UUID, name, picture string) (*User, error)
 }
 
 // Service encapsulates authentication concerns: Google SSO sign-in, JWT issuance, and token invalidation.
@@ -27,35 +33,56 @@ type Service interface {
 }
 
 type service struct {
-	userStore      UserStore
-	oauthClientID  string
-	jwtSecret      string
-	jwtExpiration  int
-	blacklistRepo  middleware.TokenBlacklistRepository
+	userStore     UserStore
+	logger        logger.Logger
+	oauthClientID string
+	jwtSecret     string
+	jwtExpiration int
+	blacklistRepo middleware.TokenBlacklistRepository
 }
 
-func NewService(userStore UserStore, oauthClientID, jwtSecret string, jwtExpiration int, blacklistRepo middleware.TokenBlacklistRepository) Service {
+func NewService(userStore UserStore, appLogger logger.Logger, oauthClientID, jwtSecret string, jwtExpiration int, blacklistRepo middleware.TokenBlacklistRepository) Service {
 	return &service{
-		userStore:      userStore,
-		oauthClientID:  oauthClientID,
-		jwtSecret:      jwtSecret,
-		jwtExpiration:  jwtExpiration,
-		blacklistRepo:  blacklistRepo,
+		userStore:     userStore,
+		logger:        appLogger,
+		oauthClientID: oauthClientID,
+		jwtSecret:     jwtSecret,
+		jwtExpiration: jwtExpiration,
+		blacklistRepo: blacklistRepo,
 	}
 }
 
 func (s *service) ProcessGoogleAuth(ctx context.Context, input GoogleAuthInput) (*User, bool, error) {
 	payload, err := idtoken.Validate(ctx, input.IDToken, s.oauthClientID)
 	if err != nil {
-		return nil, false, fmt.Errorf("invalid google id_token: %v", err)
+		return nil, false, fmt.Errorf("%w: google token validation failed", apperrors.ErrUnauthorized)
 	}
 
 	googleID := payload.Subject
-	email := fmt.Sprintf("%v", payload.Claims["email"])
-	name := fmt.Sprintf("%v", payload.Claims["name"])
+	if googleID == "" {
+		return nil, false, fmt.Errorf("%w: subject claim missing", apperrors.ErrUnauthorized)
+	}
+
+	emailRaw, ok := payload.Claims["email"].(string)
+	if !ok || strings.TrimSpace(emailRaw) == "" {
+		return nil, false, fmt.Errorf("%w: email claim missing or invalid", apperrors.ErrUnauthorized)
+	}
+	email := strings.ToLower(strings.TrimSpace(emailRaw))
+
+	emailVerified, _ := payload.Claims["email_verified"].(bool)
+	if !emailVerified {
+		return nil, false, fmt.Errorf("%w: email not verified by provider", apperrors.ErrUnauthorized)
+	}
+
+	nameRaw, ok := payload.Claims["name"].(string)
+	if !ok || strings.TrimSpace(nameRaw) == "" {
+		return nil, false, fmt.Errorf("%w: name claim missing or invalid", apperrors.ErrUnauthorized)
+	}
+	name := strings.TrimSpace(nameRaw)
+
 	picture := ""
-	if payload.Claims["picture"] != nil {
-		picture = fmt.Sprintf("%v", payload.Claims["picture"])
+	if pictureRaw, ok := payload.Claims["picture"].(string); ok {
+		picture = strings.TrimSpace(pictureRaw)
 	}
 
 	existingUser, err := s.userStore.FindByGoogleID(ctx, googleID)
@@ -64,10 +91,30 @@ func (s *service) ProcessGoogleAuth(ctx context.Context, input GoogleAuthInput) 
 	}
 
 	if existingUser != nil {
-		existingUser.Name = name
-		existingUser.Picture = picture
-		s.userStore.Update(ctx, existingUser)
+		if existingUser.Name != name || existingUser.Picture != picture {
+			updated, err := s.userStore.UpdateGoogleProfile(ctx, existingUser.ID, name, picture)
+			if err != nil {
+				return nil, false, err
+			}
+			return updated, false, nil
+		}
 		return existingUser, false, nil
+	}
+
+	deletedUser, err := s.userStore.FindByGoogleIDAny(ctx, googleID)
+	if err != nil {
+		return nil, false, err
+	}
+	if deletedUser != nil {
+		return nil, false, fmt.Errorf("%w: google_id belongs to a deleted account", apperrors.ErrAccountDeleted)
+	}
+
+	emailUser, err := s.userStore.FindByEmail(ctx, email)
+	if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
+		return nil, false, err
+	}
+	if emailUser != nil {
+		return nil, false, fmt.Errorf("%w: email already registered with a different provider identity", apperrors.ErrConflict)
 	}
 
 	newUser := &User{
@@ -77,8 +124,7 @@ func (s *service) ProcessGoogleAuth(ctx context.Context, input GoogleAuthInput) 
 		Picture:  picture,
 	}
 
-	err = s.userStore.Create(ctx, newUser)
-	if err != nil {
+	if err := s.userStore.CreateWithDefaultCategories(ctx, newUser); err != nil {
 		return nil, false, err
 	}
 

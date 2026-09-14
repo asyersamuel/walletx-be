@@ -14,9 +14,13 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByGoogleID(ctx context.Context, googleID string) (User, error)
+	GetUserByGoogleIDAny(ctx context.Context, googleID string) (User, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	Ping(ctx context.Context) (int32, error)
+	SoftDeleteUser(ctx context.Context, id pgtype.UUID) (int64, error)
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
+	UpdateUserGoogleProfile(ctx context.Context, arg UpdateUserGoogleProfileParams) (User, error)
+	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)
 }
 
 var _ Querier = (*Queries)(nil)
