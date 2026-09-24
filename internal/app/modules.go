@@ -4,6 +4,7 @@ import (
 	"walletx-be/configs"
 	"walletx-be/internal/middleware"
 	"walletx-be/internal/modules/auth"
+	"walletx-be/internal/modules/categories"
 	"walletx-be/internal/modules/users"
 	sqlc "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/logger"
@@ -15,8 +16,9 @@ import (
 
 // Modules aggregates the business modules enabled by the application.
 type Modules struct {
-	Auth  *auth.Module
-	Users *users.Module
+	Auth       *auth.Module
+	Users      *users.Module
+	Categories *categories.Module
 }
 
 // buildModules constructs the enabled modules and wires their dependencies.
@@ -47,9 +49,11 @@ func buildModules(
 	)
 
 	usersMod := users.NewModule(queries, appLogger, authMod.Service)
+	categoriesMod := categories.NewModule(queries, appLogger)
 
 	return &Modules{
-		Auth:  authMod,
-		Users: usersMod,
+		Auth:       authMod,
+		Users:      usersMod,
+		Categories: categoriesMod,
 	}, nil
 }

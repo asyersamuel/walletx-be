@@ -44,7 +44,7 @@ func (r *userRepository) Create(ctx context.Context, user *User) error {
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
-			return apperrors.ErrDuplicate
+			return apperrors.ErrConflict
 		}
 		return err
 	}
@@ -90,7 +90,7 @@ func (r *userRepository) Update(ctx context.Context, user *User) error {
 			return apperrors.ErrNotFound
 		}
 		if database.IsUniqueViolation(err) {
-			return apperrors.ErrDuplicate
+			return apperrors.ErrConflict
 		}
 		return err
 	}
@@ -159,7 +159,7 @@ func (r *userRepository) CreateWithDefaultCategories(ctx context.Context, user *
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
-			return apperrors.ErrDuplicate
+			return apperrors.ErrConflict
 		}
 		return err
 	}

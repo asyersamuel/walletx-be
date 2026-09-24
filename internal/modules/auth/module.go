@@ -28,7 +28,7 @@ func NewModule(
 	oauthConfig *oauth2.Config,
 ) *Module {
 	userRepo := NewUserRepository(pool, queries, appLogger)
-	svc := NewService(userRepo, appLogger, oauthClientID, jwtSecret, jwtExpiration, blacklistRepo)
+	svc := NewService(userRepo, NewGoogleTokenVerifier(oauthClientID), appLogger, jwtSecret, jwtExpiration, blacklistRepo)
 
 	return &Module{
 		Handler:    NewHandler(svc, appLogger, oauthConfig),

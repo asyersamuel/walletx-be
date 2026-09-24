@@ -93,7 +93,7 @@ func (h *Handler) processAuthLogic(c *gin.Context, input GoogleAuthInput) {
 		case errors.Is(err, apperrors.ErrUnauthorized):
 			h.logger.WithField("operation", "google_auth").Warn("Google token validation failed")
 			response.Unauthorized(c, "Invalid or expired Google token")
-		case errors.Is(err, apperrors.ErrConflict), errors.Is(err, apperrors.ErrAccountDeleted), errors.Is(err, apperrors.ErrDuplicate):
+		case errors.Is(err, apperrors.ErrConflict), errors.Is(err, apperrors.ErrAccountDeleted):
 			h.logger.WithField("operation", "google_auth").Warn("Account conflict during authentication")
 			response.FailWithStatus(c, http.StatusConflict, "Account conflict")
 		default:
@@ -124,13 +124,16 @@ func (h *Handler) processAuthLogic(c *gin.Context, input GoogleAuthInput) {
 }
 
 func (h *Handler) Logout(c *gin.Context) {
-	authHeader := c.GetHeader("Authorization")
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		response.FailWithStatus(c, http.StatusBadRequest, "Invalid Authorization header")
+	tokenString := c.GetHeader("Authorization")
+	if !strings.HasPrefix(tokenString, "Bearer ") {
+		// Mirrors middleware.AuthMiddleware: an unauthenticated logout is 401,
+		// not 400. Reachable when the middleware accepted a ?token= query
+		// parameter but no Authorization header is present.
+		response.Unauthorized(c, "Token required")
 		return
 	}
 
-	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 
 	if err := h.service.Logout(c.Request.Context(), tokenString); err != nil {
 		response.ErrorWithDetails(c, "Failed to process logout", err.Error())

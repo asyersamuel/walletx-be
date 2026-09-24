@@ -86,7 +86,7 @@ func (h *Handler) handleError(c *gin.Context, operation, message string, err err
 		response.FailWithStatus(c, http.StatusBadRequest, err.Error())
 	case errors.Is(err, apperrors.ErrNotFound):
 		response.NotFound(c, "User not found")
-	case errors.Is(err, apperrors.ErrDuplicate):
+	case errors.Is(err, apperrors.ErrConflict):
 		response.FailWithStatus(c, http.StatusConflict, "User already exists")
 	default:
 		h.logger.WithError(err).WithField("operation", operation).Error("User operation failed")

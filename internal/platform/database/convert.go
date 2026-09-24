@@ -62,3 +62,12 @@ func DateValue(value pgtype.Date) time.Time {
 	}
 	return value.Time
 }
+
+// NullableTextParam converts a *string into a pgtype.Text suitable for use
+// as a nullable SQL parameter. A nil pointer produces a NULL value.
+func NullableTextParam(value *string) pgtype.Text {
+	if value == nil {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: *value, Valid: true}
+}

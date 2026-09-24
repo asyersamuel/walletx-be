@@ -25,6 +25,26 @@ type UserStore interface {
 	UpdateGoogleProfile(ctx context.Context, userID uuid.UUID, name, picture string) (*User, error)
 }
 
+// TokenVerifier verifies a Google ID token and returns its validated payload.
+// It is the seam that keeps the auth service testable without network I/O.
+type TokenVerifier interface {
+	Validate(ctx context.Context, idToken string) (*idtoken.Payload, error)
+}
+
+// googleTokenVerifier is the production TokenVerifier backed by Google's
+// idtoken package. The OAuth client ID is the expected token audience.
+type googleTokenVerifier struct {
+	clientID string
+}
+
+func NewGoogleTokenVerifier(oauthClientID string) TokenVerifier {
+	return &googleTokenVerifier{clientID: oauthClientID}
+}
+
+func (v *googleTokenVerifier) Validate(ctx context.Context, token string) (*idtoken.Payload, error) {
+	return idtoken.Validate(ctx, token, v.clientID)
+}
+
 // Service encapsulates authentication concerns: Google SSO sign-in, JWT issuance, and token invalidation.
 type Service interface {
 	ProcessGoogleAuth(ctx context.Context, input GoogleAuthInput) (*User, bool, error)
@@ -34,18 +54,18 @@ type Service interface {
 
 type service struct {
 	userStore     UserStore
+	verifier      TokenVerifier
 	logger        logger.Logger
-	oauthClientID string
 	jwtSecret     string
 	jwtExpiration int
 	blacklistRepo middleware.TokenBlacklistRepository
 }
 
-func NewService(userStore UserStore, appLogger logger.Logger, oauthClientID, jwtSecret string, jwtExpiration int, blacklistRepo middleware.TokenBlacklistRepository) Service {
+func NewService(userStore UserStore, verifier TokenVerifier, appLogger logger.Logger, jwtSecret string, jwtExpiration int, blacklistRepo middleware.TokenBlacklistRepository) Service {
 	return &service{
 		userStore:     userStore,
+		verifier:      verifier,
 		logger:        appLogger,
-		oauthClientID: oauthClientID,
 		jwtSecret:     jwtSecret,
 		jwtExpiration: jwtExpiration,
 		blacklistRepo: blacklistRepo,
@@ -53,7 +73,7 @@ func NewService(userStore UserStore, appLogger logger.Logger, oauthClientID, jwt
 }
 
 func (s *service) ProcessGoogleAuth(ctx context.Context, input GoogleAuthInput) (*User, bool, error) {
-	payload, err := idtoken.Validate(ctx, input.IDToken, s.oauthClientID)
+	payload, err := s.verifier.Validate(ctx, input.IDToken)
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: google token validation failed", apperrors.ErrUnauthorized)
 	}

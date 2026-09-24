@@ -1,473 +1,475 @@
-# WalletX Users API Planning
-
-## [x] Master Checklist: Authentication Google OAuth
-
-- [x] Menetapkan kontrak tunggal `POST /api/v1/auth/google` untuk login dan register.
-- [x] Memvalidasi Google `id_token` menggunakan `google.golang.org/api/idtoken` dengan OAuth client ID dari konfigurasi.
-- [x] Memastikan claim wajib (`sub`, `email`, `name`, dan `email_verified`) tervalidasi sebelum mengakses database.
-- [x] Menambahkan alur create user melalui fungsi users yang membuat user dan default categories dalam satu transaksi atomik. *(categories BLOCKED: schema belum ada; transaction infra sudah siap)*
-- [x] Menangani user lama berdasarkan `google_id` dan memperbarui `name`/`picture` dari Google bila berubah.
-- [x] Menolak konflik antara `email` dan identitas Google yang berbeda tanpa membuat data parsial.
-- [x] Membuat internal JWT hanya setelah verifikasi Google dan operasi database berhasil.
-- [ ] Menulis unit test untuk token valid, token invalid, token expired, claim wajib tidak ada, konflik email, user baru, user lama, dan rollback transaksi.
-- [ ] Menguji endpoint `POST /api/v1/auth/google` melalui Bruno: token valid user baru menghasilkan `201`, token valid user lama menghasilkan `200`, token expired menghasilkan `401`, dan payload kosong/malformed menghasilkan `400`.
-- [ ] Menguji retry token valid tidak membuat user atau default categories duplikat.
-- [x] Menjalankan `gofmt`, `go test ./...`, dan `go vet ./...` setelah fase implementasi selesai.
-
-## Current Phase & Objective
-
-### Phase: Authentication Contract and Google OAuth Design
-
-**Objective:** Menetapkan desain implementasi autentikasi berbasis Google OAuth di
-modul `internal/modules/auth/`. Login dan register sengaja digabung dalam satu
-endpoint publik. Authorization/protected resource flow berada di luar scope fase
-ini.
-
-Prinsip utama:
-
-- Client hanya mengirim Google `id_token`; client tidak boleh mengirim `google_id`,
-  email, atau data user yang dipercaya backend.
-- Backend memvalidasi token, mengambil identity/profile dari claim yang tervalidasi,
-  lalu mendelegasikan persistence user dan default categories ke modul users.
-- Token Google tidak pernah dikembalikan atau dicatat. Client menerima internal
-  JWT WalletX setelah seluruh proses berhasil.
-
-## Rincian Task
-
-### Task 1: Route dan Payload
-
-**Route:**
-
-```http
-POST /api/v1/auth/google
-Content-Type: application/json
-```
-
-**Payload:**
-
-```json
-{
-  "id_token": "<google-id-token>"
-}
-```
-
-Aturan payload:
-
-1. `id_token` wajib berupa string non-empty.
-2. JSON malformed, body kosong, field unknown, atau tipe field salah ditolak.
-3. Google access token, authorization header, password, dan `google_id` bukan
-   bagian dari kontrak endpoint ini.
-
-### Task 2: Verifikasi Google Token
-
-1. `auth/service.go` menggunakan `google.golang.org/api/idtoken.Validate` dengan
-   OAuth client ID dari konfigurasi server sebagai audience.
-2. Library harus memvalidasi signature Google, issuer, audience, expiry, dan
-   struktur token. Token expired atau signature/audience tidak valid dipetakan
-   menjadi `401 Unauthorized`.
-3. Pastikan claim `sub`, `email`, dan `name` ada dan memiliki tipe/nilai valid.
-   `email_verified` wajib bernilai true sebelum identity dipakai untuk login atau
-   register.
-4. Normalisasi email untuk lookup/unique check, tetapi gunakan `sub` sebagai
-   stable provider identity (`google_id`). Claim `picture` bersifat optional.
-5. Error dari provider tidak boleh mengandung atau mengembalikan token kepada
-   client. Log hanya dilakukan di boundary dengan logger abstraction dan tanpa
-   token, authorization header, atau request body.
-
-### Task 3: Business Logic Register dan Login
-
-1. Cari user aktif berdasarkan `google_id` melalui capability yang disediakan
-   modul users; jika perlu, lakukan pengecekan email untuk mendeteksi identity
-   conflict.
-2. **Register (user baru):** bila `google_id` dan email belum ada, panggil fungsi
-   users seperti `CreateWithDefaultCategories` yang menjalankan insert user dan
-   insert seluruh default categories dalam satu database transaction. Commit hanya
-   jika semua operasi berhasil; rollback jika salah satu operasi gagal.
-3. Default categories harus memakai daftar yang telah disetujui product, memiliki
-   ownership ke user baru, dan aman terhadap retry/idempotent sehingga tidak ada
-   duplikasi akibat request yang diulang.
-4. **Login (user lama):** bila user aktif ditemukan berdasarkan `google_id`, update
-   `name` dan `picture` hanya bila nilai dari Google berubah. Jangan menerima atau
-   mengubah `google_id` dari client.
-5. Jika email telah dimiliki user lain atau `google_id` terhubung ke email yang
-   berbeda, kembalikan `409 Conflict` dan jangan menghasilkan perubahan parsial.
-6. Jika user ditemukan soft-deleted, jangan otomatis mengaktifkan kembali akun;
-   kembalikan conflict atau error account-recovery sesuai keputusan produk.
-7. Setelah persistence sukses, generate internal JWT WalletX menggunakan secret,
-   expiry, `user_id`, `jti`, `iat`, dan claim minimum yang disepakati. JWT dibuat
-   setelah commit, bukan sebelum transaction selesai.
-
-### Task 4: Expected Response
-
-**Register berhasil:** `201 Created`.
-
-**Login berhasil:** `200 OK`.
-
-```json
-{
-  "status": "success",
-  "message": "Registration successful",
-  "data": {
-    "user": {
-      "id": "uuid",
-      "google_id": "provider-user-id",
-      "email": "user@example.com",
-      "name": "User Name",
-      "picture": "https://example.com/avatar.jpg"
-    },
-    "token": "<internal-jwt>"
-  },
-  "timestamp": "timestamp"
-}
-```
-
-Untuk user lama, message menjadi `Login successful`. Error contract:
-
-- `400 Bad Request`: body/payload invalid atau claim wajib tidak valid secara bentuk.
-- `401 Unauthorized`: Google token invalid, expired, audience salah, atau email
-  belum terverifikasi.
-- `409 Conflict`: email/provider identity conflict atau akun telah dihapus.
-- `500 Internal Server Error`: kegagalan database, transaction, atau pembuatan
-  internal JWT tanpa membocorkan detail internal.
-
-### Task 5: Struktur Modul dan File yang Dimodifikasi
-
-**Modul `internal/modules/auth/`:**
-
-- `dto.go`: request/response DTO, validasi payload, dan pemisahan claim provider
-  dari model internal.
-- `handler.go`: strict JSON binding, pemetaan error ke HTTP status, response
-  envelope, dan pemanggilan service; tidak berisi business logic persistence.
-- `service.go`: verifikasi Google token, orchestration login/register, pemanggilan
-  capability users, dan pembuatan internal JWT.
-- `routes.go`: registrasi endpoint publik `POST /api/v1/auth/google`; route logout
-  atau helper development tidak menjadi bagian alur utama ini.
-- `module.go`: wiring service, dependency users, konfigurasi OAuth/JWT, dan logger.
-- `repository.go`/`model.go`/`blacklist.go`: hanya dimodifikasi bila kontrak
-  persistence atau model auth memang membutuhkan perubahan; jangan membuat
-  duplicate persistence logic yang seharusnya berada di users.
-
-**Integrasi modul users dan persistence:**
-
-- Tambahkan narrow interface/capability users untuk lookup berdasarkan Google ID
-  atau email serta `CreateWithDefaultCategories` yang menjamin satu transaction.
-- Modifikasi repository/query/migration users/categories sesuai schema yang
-  diperlukan; transaksi harus dimiliki boundary persistence, bukan handler auth.
-- Mapping duplicate/not-found/soft-deleted ke application error dilakukan sebelum
-  handler menerjemahkannya menjadi HTTP response.
-
-### Task 6: Skenario Pengujian Bruno
-
-Tambahkan request collection/environment Bruno dengan `baseUrl` dan token Google
-yang tidak disimpan di repository. Jalankan kasus berikut terhadap endpoint yang
-sama:
-
-1. **Register token valid:** kirim token valid untuk email baru; verifikasi `201`,
-   `data.user`, internal JWT, dan user serta default categories tercipta.
-2. **Login token valid:** kirim token valid untuk user yang sudah ada; verifikasi
-   `200`, profile `name`/`picture` tersinkron, dan tidak ada categories duplikat.
-3. **Profile berubah:** kirim token valid dengan nama/foto berbeda; verifikasi row
-   user diperbarui sesuai claim Google.
-4. **Token expired:** kirim Google token expired; verifikasi `401` dan tidak ada
-   insert/update database.
-5. **Token invalid atau audience salah:** verifikasi `401` dan response tidak
-   membocorkan detail token/provider.
-6. **Payload kosong:** kirim `{}`; verifikasi `400`.
-7. **Payload malformed atau `id_token` bukan string:** verifikasi `400`.
-8. **Email/provider conflict:** verifikasi `409` dan tidak ada data parsial.
-9. **Retry register:** ulangi request token valid yang sama; verifikasi hasil
-   idempotent dan jumlah default categories tetap satu set.
-10. **Database failure/rollback:** simulasikan kegagalan pembuatan category;
-    verifikasi user baru juga tidak tersisa setelah request gagal.
-
-## Status Eksekusi
-
-**Status:** EXECUTED (scope: Authentication Google OAuth, Task 1–5) — siap untuk unit test dan pengujian Bruno.
-
-Dieksekusi:
-
-- `internal/shared/errors/errors.go`: tambah `ErrConflict` dan `ErrAccountDeleted`.
-- `internal/platform/database/queries/auth.sql`: tambah `GetUserByGoogleIDAny`
-  (tanpa filter `deleted_at`) dan `UpdateUserGoogleProfile` (hanya `name`/`picture`);
-  regenerate sqlc v1.29.0.
-- `internal/modules/auth/dto.go`: tambah `UserResponse`, `GoogleAuthResponse`,
-  helper `toUserResponse`; hapus `binding:"required"` dari `GoogleAuthInput`
-  (validasi dipindah ke handler dengan strict JSON decoder).
-- `internal/modules/auth/repository.go`: tambah `pool *pgxpool.Pool`; implementasi
-  `FindByGoogleIDAny`, `UpdateGoogleProfile`, `CreateWithDefaultCategories`
-  (transaksi pgx; insert default categories masih TODO/BLOCKED menunggu schema).
-- `internal/modules/auth/service.go`: inject `logger.Logger`; validasi claim
-  `sub`/`email`/`name`/`email_verified`; normalisasi email (lowercase+trim);
-  deteksi akun soft-deleted via `FindByGoogleIDAny`; deteksi konflik email via
-  `FindByEmail`; update profile hanya bila `name`/`picture` berubah; map semua
-  error Google ke `apperrors.ErrUnauthorized` tanpa membocorkan detail token.
-- `internal/modules/auth/handler.go`: strict JSON decoder (`DisallowUnknownFields`);
-  validasi `id_token` non-empty; mapping error ke HTTP status
-  (400/401/409/500); log di boundary dengan level Warn untuk 4xx dan Error untuk
-  5xx; response menggunakan `GoogleAuthResponse` DTO.
-- `internal/modules/auth/module.go`: terima `*pgxpool.Pool`, teruskan ke repository
-  dan logger ke service+handler.
-- `internal/app/modules.go` dan `internal/app/app.go`: teruskan `db` (pool) ke
-  `buildModules` dan `auth.NewModule`.
-- Verifikasi: `gofmt`, `go build ./...`, `go vet ./...`, `go test ./...` → PASS.
-
-Belum dieksekusi (blocked):
-
-- Insert default categories di `CreateWithDefaultCategories` — menunggu migration
-  tabel `categories` dan product decision daftar default category.
-- Unit test service auth (token valid/invalid/expired, konflik email, rollback).
-- Pengujian endpoint via Bruno (Task 6).
-
-## Master Checklist Proyek
-
-- [x] Menyetujui kontrak API users dan keputusan soft delete.
-- [ ] Menambahkan migration untuk tabel `categories` dan `transactions` beserta foreign key ke `users`. *(BLOCKED: menunggu product decision daftar default category)*
-- [ ] Menentukan daftar dan atribut default category yang bersifat product decision. *(BLOCKED)*
-- [x] Menambahkan DTO, validasi, service, repository, dan route untuk operasi users.
-- [ ] Menambahkan transaksi database atomik untuk create user dan default categories. *(BLOCKED: tabel categories belum ada)*
-- [x] Menambahkan soft-delete untuk user (cascade ke categories/transactions menyusul setelah migration-nya ada).
-- [x] Menambahkan invalidasi token setelah penghapusan user.
-- [x] Menambahkan unit test service users (repository/integration test menyusul).
-- [x] Memperbarui dokumentasi API (`docs/API_DOCUMENTATION.md`).
-- [x] Menjalankan `gofmt`, `go test ./...`, dan `go vet ./...`.
-
-## Current Phase
-
-### Phase: API Contract and Data-Lifecycle Design
-
-**Objective:** Menetapkan kontrak HTTP, aturan ownership, validasi, dan lifecycle
-data user sebelum implementasi apa pun dimulai.
-
-Kondisi repository saat ini:
-
-- Tabel `users` sudah tersedia dengan kolom `deleted_at`, unique `google_id`, dan
-  unique `email`.
-- User baru saat ini dibuat oleh `POST /api/v1/auth/google` setelah Google ID
-  token tervalidasi. Route ini tetap menjadi jalur Create publik yang canonical;
-  tidak menambahkan `POST /users` yang menerima `google_id` mentah.
-- Tabel `categories` dan `transactions` belum ada pada migration aktif. Keduanya
-  wajib dibuat terlebih dahulu sebelum aturan relasional di bawah dapat diterapkan.
-- Semua route users bersifat self-service dan membutuhkan JWT valid. User ID
-  selalu diambil dari claim/context authentication, bukan dari body request.
-
-## Rincian Per Task
-
-### Task 1: Create User
-
-**Route:**
-
-```http
-POST /api/v1/auth/google
-Content-Type: application/json
-```
-
-Route ini mewakili operasi Create user. Endpoint user CRUD tidak menyediakan
-create anonim atau menerima identitas provider dari client secara langsung.
-
-**Payload:**
-
-```json
-{
-  "id_token": "<google-id-token>"
-}
-```
-
-**Business Logic:**
-
-1. Parse JSON dan validasi `id_token` wajib, tidak kosong, dan bertipe string.
-2. Validasi token ke Google menggunakan configured client ID. Jangan mencatat
-   token, Authorization header, atau request body ke log.
-3. Ambil `sub`, `email`, `name`, dan optional `picture` dari claims provider.
-   `sub`, `email`, dan `name` wajib tersedia; normalisasi email untuk lookup dan
-   unique check.
-4. Cari user berdasarkan `google_id`.
-5. Jika user belum ada, buat row `users` dan default categories dalam satu
-   database transaction. Commit hanya jika seluruh operasi berhasil.
-6. Default categories harus idempotent dan dimiliki oleh user tersebut. Nama,
-   tipe, warna, dan icon final ditetapkan pada migration/product decision; retry
-   tidak boleh membuat duplikasi.
-7. Jika email sudah dimiliki user lain, hentikan proses dengan conflict dan jangan
-   membuat sebagian data.
-8. Jika user sudah ada dan aktif, update field profile yang berasal dari Google
-   (`name` dan `picture`) sesuai perilaku authentication saat ini. Jangan
-   mengubah `google_id` melalui request client.
-9. Jika user ditemukan dengan `deleted_at` terisi, jangan diam-diam menghidupkan
-   kembali akun. Kembalikan conflict atau gunakan alur account-recovery yang
-   disetujui secara terpisah.
-10. Generate JWT hanya setelah transaction berhasil. Error database atau provider
-    dikembalikan ke boundary handler dan dicatat di boundary tersebut dengan
-    logger abstraction.
-
-**Expected Response:**
-
-- User baru: `201 Created`.
-- User existing yang berhasil login/update profile: `200 OK`.
-- Body menggunakan response envelope standar:
-
-```json
-{
-  "status": "success",
-  "message": "Registration successful",
-  "data": {
-    "user": {
-      "id": "uuid",
-      "google_id": "provider-user-id",
-      "email": "user@example.com",
-      "name": "User Name",
-      "picture": "https://example.com/avatar.jpg",
-      "created_at": "timestamp",
-      "updated_at": "timestamp"
-    },
-    "token": "<internal-jwt>"
-  },
-  "timestamp": "timestamp"
-}
-```
-
-Error contract:
-
-- `400 Bad Request` untuk JSON atau payload invalid.
-- `401 Unauthorized` untuk Google token invalid/expired.
-- `409 Conflict` untuk email/provider identity conflict atau akun yang telah
-  dihapus.
-- `500 Internal Server Error` untuk kegagalan database/provider internal tanpa
-  membocorkan detail sensitif.
-
-### Task 2: Edit User Profile
-
-**Route:**
-
-```http
-PUT /api/v1/users/me
-Authorization: Bearer <internal-jwt>
-Content-Type: application/json
-```
-
-**Payload:**
-
-```json
-{
-  "name": "Updated Name",
-  "picture": "https://example.com/new-avatar.jpg"
-}
-```
-
-`name` wajib dan boleh diedit. `picture` optional dan boleh dikosongkan untuk
-menghapus avatar. `email`, `google_id`, `id`, `created_at`, `updated_at`, dan
-`deleted_at` tidak boleh diterima sebagai field mutable dari client.
-
-**Business Logic:**
-
-1. Pastikan JWT valid dan parse `user_id` sebagai UUID.
-2. Reject unknown field, malformed JSON, `name` kosong setelah trim, name di luar
-   batas panjang yang disepakati, dan picture yang bukan URL valid atau melebihi
-   batas panjang.
-3. Ambil user berdasarkan user ID dari JWT dan pastikan `deleted_at IS NULL`.
-4. Update hanya field profile yang diizinkan. Database trigger mengisi
-   `updated_at`; client tidak boleh mengontrol timestamp.
-5. Bila row tidak ditemukan, kembalikan `404`; bila terjadi unique conflict yang
-   tidak terduga, kembalikan `409`.
-6. Jangan mengubah category atau transaction user pada profile update.
-
-**Expected Response:**
-
-- `200 OK` dengan `data.user` berisi representasi user terbaru dan message
-  `User profile updated successfully`.
-- `400 Bad Request` untuk validation error.
-- `401 Unauthorized` untuk token invalid/expired/revoked.
-- `404 Not Found` bila user tidak aktif atau tidak ditemukan.
-- `500 Internal Server Error` untuk kegagalan persistence.
-
-### Task 3: Delete User Account
-
-**Route:**
-
-```http
-DELETE /api/v1/users/me
-Authorization: Bearer <internal-jwt>
-```
-
-**Payload:** Tidak ada request body. Jika body dikirim, endpoint tetap tidak
-boleh menerima field penghapusan atau user ID dari client.
-
-**Business Logic:**
-
-1. Validasi JWT dan ambil `user_id` dari context authentication.
-2. Jalankan satu database transaction dengan locking/guard agar dua request
-   delete bersamaan tetap aman.
-3. Set `users.deleted_at` dan `updated_at` untuk user aktif. Jangan hard-delete
-   pada operasi normal karena data finansial membutuhkan audit/history dan
-   `users.deleted_at` memang sudah disediakan schema.
-4. Terapkan soft-delete cascade: tandai categories milik user sebagai deleted
-   dan sembunyikan/arsipkan transactions milik user sesuai kolom lifecycle yang
-   disediakan migration. Semua query feature wajib memfilter data user yang
-   sudah dihapus.
-5. Foreign key categories dan transactions tetap menjaga ownership ke user.
-   Jangan memakai database `ON DELETE CASCADE` pada soft delete karena trigger
-   tersebut tidak berjalan saat hanya mengisi `deleted_at`. Hard purge, bila
-   dibutuhkan untuk privacy compliance, harus menjadi job/admin flow terpisah
-   dengan policy `ON DELETE CASCADE` yang diuji dan disetujui.
-6. Setelah commit berhasil, revoke token aktif yang digunakan request. Jika
-   requirement mengharuskan seluruh session user direvoke, diperlukan session
-   store/token version; blacklist memory saat ini belum cukup untuk itu.
-7. Operasi harus idempotent: user yang sudah soft-deleted tidak menghapus data
-   ulang dan dapat mengembalikan `204 No Content` tanpa membocorkan informasi.
-
-**Keputusan final (dieksekusi):** delete sepenuhnya idempotent — selalu
-`204 No Content` untuk JWT valid, termasuk akun yang sudah soft-deleted.
-Tidak ada `404` agar status akun tidak dapat dienumerasi.
-
-**Expected Response:**
-
-- `204 No Content` tanpa response envelope dan tanpa response body setelah commit
-  berhasil.
-- `401 Unauthorized` untuk token invalid/expired/revoked.
-- `500 Internal Server Error` bila transaction gagal; tidak boleh ada partial
-  delete.
-
-### Cross-Cutting Implementation Tasks
-
-- Tambahkan schema migration categories/transactions lebih dahulu, termasuk
-  `user_id`, ownership index, lifecycle columns, dan foreign key policy.
-- Tambahkan query SQL di `internal/platform/database/queries`, lalu generate
-  sqlc; jangan mengedit file generated secara manual.
-- Pisahkan DTO request dari model database agar field immutable tidak dapat
-  diubah lewat mass binding.
-- Map database errors ke application errors (`not found`, `duplicate`, dan
-  `conflict`) pada repository; handler hanya menerjemahkan ke HTTP response.
-- Inject `logger.Logger` ke component yang membutuhkan logging. Hanya logger
-  abstraction yang boleh memakai logrus dan log harus bebas dari token, password,
-  email lengkap, serta request body.
-- Uji unauthorized ownership, invalid payload, duplicate/retry create, rollback
-  default category, update deleted user, concurrent delete, dan cascade filter.
-
-## Status Eksekusi
-
-**Status:** EXECUTED (scope: Users API) — siap untuk testing Bruno.
-
-Dieksekusi:
-
-- Query sqlc baru: `UpdateUserProfile`, `SoftDeleteUser`
-  (`internal/platform/database/queries/users.sql` → `sqlc generate` v1.29.0).
-- Module baru `internal/modules/users/`: `model.go`, `dto.go`
-  (`UpdateUserRequest`), `repository.go`, `service.go`, `handler.go`,
-  `routes.go`, `module.go`, `service_test.go`.
-- Route protected terdaftar di `internal/app/router.go`:
-  - `PUT /api/v1/users/me` → `200 OK` envelope `data.user`.
-  - `DELETE /api/v1/users/me` → `204 No Content`, idempotent, revoke token aktif.
-- Token revocation setelah delete memakai `auth.Service.Logout` melalui
-  interface sempit `users.TokenRevoker`.
-- Validasi: strict JSON (unknown field ditolak), name wajib/max 100 setelah
-  trim, picture null=tidak berubah / `""`=hapus avatar / selain itu wajib URL
-  http(s) max 2048.
-- `docs/API_DOCUMENTATION.md` diperbarui.
-- Verifikasi: `gofmt`, `go build ./...`, `go vet ./...`, `go test ./...` → PASS
-  (12 unit test service users).
-
-Belum dieksekusi (blocked, butuh keputusan produk):
-
-- Migration `categories` + `transactions` dan default categories saat create
-  user (Task 1 poin 5–6) — tabel belum ada di schema aktif.
-- Soft-delete cascade ke categories/transactions — menyusul setelah migration.
-- Hard purge flow (privacy compliance) — job/admin terpisah.
-- Integration test endpoint dan repository test terhadap database nyata.
+# WalletX Auth and Categories Master Plan
+
+**Status:** Execution plan
+
+**Primary standard:** Test-Driven Development (TDD)
+
+This document is the single implementation plan for the `auth` and `categories`
+modules. No production behavior is considered complete until its repository,
+service, and handler tests have been written and passed.
+
+## 1. Architecture and Technology Stack
+
+### Repository shape
+
+WalletX is a Go monorepo with a layered internal architecture:
+
+- `cmd/server` and `api` are application entry points.
+- `internal/app` owns composition, dependency wiring, and route registration.
+- `internal/modules/auth` and `internal/modules/categories` contain each
+  module's models, DTOs, repository, service, handler, routes, and tests.
+- `internal/platform/database` owns the PostgreSQL connection pool, SQL source,
+  and generated `sqlc` package.
+- `internal/middleware` owns JWT authentication, recovery, CORS, and request
+  logging.
+- `internal/shared` owns response formatting, common errors, request helpers,
+  and pagination.
+
+### Non-negotiable technology decisions
+
+- Go is the implementation language.
+- Gin is the HTTP framework and route layer.
+- PostgreSQL runs locally through Docker/Supabase containers.
+- `pgx/v5` is the PostgreSQL driver and connection/pool implementation.
+- `sqlc` is the only database query code generator and the only persistence
+  access pattern. There is no ORM and no hand-written data mapper that bypasses
+  generated queries.
+- SQL migrations in `supabase/migrations` and query files in
+  `internal/platform/database/queries` are the database source of truth.
+- Generated `sqlc` files are never edited manually; run `sqlc generate` after
+  changing migrations or query files.
+- `go-playground/validator` through Gin binding validates request shape. The
+  service layer repeats business-critical validation so business rules do not
+  depend solely on HTTP binding.
+- `github.com/golang-jwt/jwt/v5` creates and validates internal JWTs.
+- Google OAuth/ID-token verification is isolated behind an injectable provider.
+- Logrus is accessed only through the repository's logger abstraction. Logger
+  dependencies are injected into components that need them.
+
+### Dependency boundaries
+
+- Handlers depend on services, never on repositories or `sqlc` directly.
+- Services depend on repository interfaces and external-provider interfaces,
+  never on Gin or concrete database implementations.
+- Repositories depend on generated `sqlc` queries and `pgx`.
+- Tests replace every dependency at the boundary under test.
+- `user_id` for protected operations comes from verified JWT context, never from
+  a client-controlled request field.
+
+## 2. Module Specifications
+
+## 2.1 Auth Module
+
+### Responsibility
+
+Auth authenticates a user with Google, creates or updates the corresponding
+WalletX user, issues an internal JWT, and supports logout/token revocation where
+the existing authentication design requires it.
+
+### Google authentication flow
+
+1. The client submits a Google ID token to `POST /api/v1/auth/google`, or uses
+   the development OAuth helper flow when `DEV_MODE=true`.
+2. The handler validates the request envelope and passes the token/code to the
+   service.
+3. The service asks an injected Google verifier/provider to validate the token
+   with Google. The raw Google token must never be logged or returned.
+4. The service validates the verified identity data required by WalletX:
+   Google subject ID, email, display name, and optional picture.
+5. The repository finds the user by `google_id` and creates the user when absent,
+   or updates permitted profile fields when the user already exists.
+6. The service creates a signed internal JWT containing the user identity and
+   expiration data. Google tokens are not used as WalletX API tokens.
+7. The handler returns the internal JWT and safe user information.
+8. Protected requests use the JWT middleware. Missing, invalid, expired, or
+   revoked tokens return `401 Unauthorized`.
+9. Logout revokes the current token/JTI when revocation is enabled and returns a
+   successful response without exposing token details.
+
+### Users persistence
+
+The `users` table is the system of record for authenticated identities. It must
+enforce:
+
+- `id` as the UUID primary key.
+- Unique `google_id`.
+- Unique `email`.
+- Required `name`.
+- Optional `picture`.
+- `created_at`, `updated_at`, and optional `deleted_at` timestamps.
+
+Repository operations must cover lookup by Google ID, lookup by ID where
+needed, insert/upsert of an authenticated user, profile updates where required,
+and soft deletion only if the account-management contract calls for it. Unique
+violations and missing rows must be converted to application errors at the
+repository boundary.
+
+### Auth endpoints
+
+| Method | Path | Authentication | Contract |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/google` | None | Verify Google identity, persist user, return internal JWT and safe user data. |
+| `GET` | `/api/v1/auth/google/test-login` | None, development only | Start or simulate the local OAuth flow only when `DEV_MODE=true`. |
+| `GET` | `/api/v1/auth/google/callback` | None, development/provider callback | Complete the configured OAuth callback and issue the internal session result. |
+| `POST` | `/api/v1/auth/logout` | JWT | Revoke the current token/JTI when configured; do not log the token. |
+
+Auth error expectations:
+
+- Invalid/missing request data or unverifiable Google identity: `400` or `401`
+  according to the established API error contract.
+- Missing, invalid, expired, or revoked internal JWT: `401`.
+- Database/provider failure: generic `500` with internal details only in logs.
+- Duplicate identity conflicts: mapped to the defined conflict response rather
+  than leaking PostgreSQL errors.
+
+JWT tests must verify signing algorithm, required user claims, JTI behavior,
+expiration, invalid signatures, expired tokens, malformed claims, and blacklist
+behavior. Tests must never assert or print a real secret or token in logs.
+
+## 2.2 Categories Module
+
+### Responsibility and data rules
+
+Categories belong to one user and classify transactions. Every category has a
+mandatory transaction `type`:
+
+- `expense` for money leaving the account.
+- `income` for money entering the account.
+
+Database invariants:
+
+- `type` is non-null and restricted to `expense` or `income` by a check
+  constraint.
+- `(user_id, name, type)` is unique.
+- The previous `(user_id, name)` uniqueness rule must not remain, because the
+  same name is valid once for each type.
+- `user_id` references `users(id)` with the existing ownership/delete behavior.
+- An index on `(user_id, type)` supports filtered listing.
+- Existing category rows, if any, are backfilled to the agreed default
+  (`expense`) before the column becomes mandatory.
+
+Service rules:
+
+- Trim category names and reject empty names.
+- Enforce the maximum name length used by the API, currently 100 characters.
+- Trim and lowercase `type` before persistence.
+- Accept only `expense` and `income`.
+- Do not perform a pre-check as a substitute for the database unique
+  constraint; concurrent duplicate creates must still be handled safely.
+- Preserve ownership on every read, update, and delete.
+- Updating a category may change its name and type, but the target combination
+  must remain unique for that user.
+
+### HTTP endpoints
+
+| Method | Path | Authentication | Success |
+|---|---|---|---|
+| `POST` | `/api/v1/categories` | JWT | `201 Created` with the created category. |
+| `GET` | `/api/v1/categories` | JWT | `200 OK`; optional `?type=expense` or `?type=income`. |
+| `PUT` | `/api/v1/categories/:id` | JWT | `200 OK` with the updated category. |
+| `DELETE` | `/api/v1/categories/:id` | JWT | `204 No Content`. |
+
+Request bodies contain only `name` and `type`; clients cannot submit `user_id`,
+timestamps, or ownership fields. Unknown fields should be rejected where the
+handler's JSON policy supports strict decoding.
+
+Category response fields are `id`, `name`, `type`, `created_at`, and
+`updated_at`. Expected error mapping:
+
+- Invalid/missing name, invalid/missing type, invalid UUID, malformed JSON, or
+  invalid `type` filter: `400`.
+- Missing/invalid/expired/revoked JWT: `401`.
+- Category absent or owned by another user: `404`.
+- Duplicate `(user_id, name, type)`: `409`.
+- Unexpected database failure: `500`.
+
+## 3. TDD Execution Strategy
+
+### Required testing stack
+
+- `testing` for test execution and subtests.
+- `github.com/stretchr/testify/assert` for non-fatal value and state checks.
+- `github.com/stretchr/testify/require` for fatal setup, dependency, and
+  precondition checks.
+- `github.com/stretchr/testify/mock` for service and handler dependency mocks
+  where a mock provides useful call/argument assertions.
+- `net/http/httptest` for Gin handler and middleware HTTP tests.
+- Local PostgreSQL in Docker/Supabase for repository integration tests.
+- Real migrations and real generated `sqlc` queries in repository tests; do not
+  replace the database with a fake in the repository test suite.
+
+Use table-driven tests for validation and error variants. Keep tests isolated:
+each integration test owns its fixtures and cleans up or runs inside a rollback
+transaction. Tests must not depend on execution order or on shared user IDs.
+
+### The mandatory Red-Green-Refactor cycle
+
+For every behavior, follow this exact sequence:
+
+1. **Red:** Write one focused test describing one observable behavior. Run the
+   smallest relevant test command and confirm it fails for the expected reason.
+2. **Green:** Implement the smallest production change that makes the test pass.
+   Do not implement untested speculative behavior.
+3. **Refactor:** Improve naming, duplication, boundaries, or error mapping while
+   keeping the test suite green. Rerun the focused test after the refactor.
+4. Run the complete module tests before starting the next behavior.
+
+A test is not considered useful merely because it executes. It must assert the
+returned result, error classification, HTTP status/body, database state, or
+dependency interaction that represents the contract.
+
+### Phase 1: Repository layer, integration-first
+
+Repository tests run against the local PostgreSQL container using the real
+migrations, `pgx`, and generated `sqlc` package. Start the database before the
+test run, apply/reset migrations deterministically, and use a dedicated test
+database or isolated schema. Never use production credentials or a committed
+connection string.
+
+#### Auth repository test sequence
+
+1. Create a user with a valid Google ID and email; assert all persisted fields.
+2. Find the user by `google_id`; assert the same identity is returned.
+3. Upsert an existing Google identity; assert no duplicate user is created and
+   permitted profile fields are updated according to the contract.
+4. Attempt duplicate `google_id`; assert the repository returns the application
+   conflict error and does not leak raw SQL details.
+5. Attempt duplicate email with a different Google ID; assert the same conflict
+   behavior.
+6. Query a missing identity; assert the application `not found` error.
+7. Test user update/soft-delete operations that are part of the implemented
+   Auth contract, including affected-row handling.
+8. If token revocation persistence is implemented in this module, test blacklist
+   insert, active blacklist lookup, expired/missing JTI behavior, and database
+   failure mapping.
+
+#### Categories repository test sequence
+
+1. Insert a category with `expense`; assert `type` and timestamps are returned.
+2. Insert a category with `income` for the same user and same name; assert it is
+   allowed.
+3. Insert the same name and same type for the same user; assert PostgreSQL's
+   unique constraint is reached and mapped to `ErrConflict`/the project error.
+4. Insert the same name and type for a different user; assert it is allowed.
+5. Insert an invalid type directly through the repository; assert the database
+   check constraint failure is mapped to invalid input.
+6. List without a type filter; assert both types are returned only for the
+   requested user.
+7. List with `expense`; assert income rows are excluded.
+8. List with `income`; assert expense rows are excluded.
+9. Update name and type atomically; assert the returned row and persisted row
+   contain both changes.
+10. Update into an existing `(user_id, name, type)` combination; assert
+    conflict mapping.
+11. Update or delete another user's category using the first user's ID; assert
+    `not found` and no cross-user mutation.
+12. Update/delete a missing category; assert `not found`.
+13. Verify delete behavior remains compatible with transaction foreign keys,
+    including `ON DELETE SET NULL` if transaction fixtures are available.
+
+### Phase 2: Service layer, isolated unit tests
+
+Service tests use mocked repositories and mocked external providers. They do not
+open PostgreSQL, create Gin contexts, or call Google. The goal is business logic
+and orchestration, not SQL behavior.
+
+#### Auth service test sequence
+
+1. Valid Google identity creates a user and returns a signed internal JWT.
+2. Existing Google identity reuses/updates the user without creating a second
+   record.
+3. Missing required Google identity fields are rejected before persistence.
+4. Google verification failure is returned without a repository call.
+5. Repository failure is returned with the correct application classification.
+6. JWT contains the expected user identity, JTI policy, and expiration.
+7. JWT signing failure is returned and no successful auth response is produced.
+8. Logout delegates revocation with the current token/JTI and propagates
+   failures correctly.
+9. Sensitive token and Google identity values are not passed to logger calls.
+
+#### Categories service test sequence
+
+1. Create trims a valid name and normalizes `EXPENSE` to `expense`.
+2. Create accepts `income` and forwards normalized values to the repository.
+3. Create rejects blank names, names over the limit, and invalid types without
+   calling the repository.
+4. Create propagates repository conflict as a conflict.
+5. List with no filter passes `nil`/no filter and returns all owned categories.
+6. List with each valid filter passes the normalized type.
+7. List rejects an invalid filter before the repository call.
+8. Update validates and normalizes both fields before calling the repository.
+9. Update propagates duplicate-target conflicts and not-found errors.
+10. Delete passes both authenticated user ID and category ID, preserving
+    ownership, and propagates repository errors.
+11. Service tests confirm no repository call occurs after invalid input.
+
+### Phase 3: Handler layer, HTTP tests
+
+Handler tests construct a Gin router with mocked services and use
+`httptest.NewRequest`/`httptest.NewRecorder`. They verify the public HTTP
+contract, not repository details. Authentication middleware is either tested
+separately with its own unit tests or replaced with a controlled test middleware
+that injects a known user ID.
+
+#### Auth handler and middleware test sequence
+
+1. Google login accepts a valid request and returns the service result with the
+   expected success status and safe response shape.
+2. Malformed JSON, missing token, and unknown fields return `400` where the
+   contract requires it.
+3. Google verification/service failure maps to the correct public status without
+   exposing internal error text.
+4. Logout without a bearer token returns `401` and does not call the service.
+5. Logout with a valid authenticated context returns the expected success.
+6. JWT middleware rejects missing, malformed, expired, invalid-signature, and
+   revoked tokens.
+7. JWT middleware injects the verified user ID and claims for downstream routes.
+8. Development-only OAuth helper routes are unavailable when `DEV_MODE=false`.
+
+#### Categories handler test sequence
+
+1. `POST` with valid `name` and `type` returns `201` and forwards the JWT user
+   ID, never a request user ID.
+2. `POST` rejects missing/invalid type, blank/overlong name, malformed JSON,
+   and forbidden unknown fields with `400`.
+3. `POST` maps service conflict to `409` and database failure to `500`.
+4. `GET` without a filter returns all categories for the authenticated user.
+5. `GET?type=expense` and `GET?type=income` forward the appropriate filter.
+6. `GET?type=invalid` returns `400` without a service call.
+7. `PUT` validates UUID, body, ownership context, and maps success to `200`.
+8. `PUT` maps not found to `404` and duplicate target to `409`.
+9. `DELETE` returns `204` and passes authenticated user ID plus route UUID.
+10. `DELETE` maps missing or foreign categories to `404`.
+11. All protected category endpoints reject missing/invalid JWT with `401`.
+12. Responses never expose internal database errors, credentials, tokens, or
+    unnecessary personal data.
+
+### Cross-layer completion gates
+
+Before moving from one layer to the next:
+
+- The current layer's focused tests are green.
+- Error types are stable enough for the next layer to map them.
+- Interfaces expose only the behavior needed by the caller.
+- SQL changes have been regenerated through `sqlc`.
+- No test relies on an implementation detail that the next layer should own.
+
+## 4. Ordered Execution Roadmap
+
+The following order is strict. Do not begin a later item while the required
+earlier tests are red or missing.
+
+### Priority 0: Test and database foundation
+
+1. Confirm Docker/Supabase PostgreSQL starts locally and the test connection is
+   isolated from development data.
+2. Confirm the migration contains `users`, `categories`, the category type check,
+   `(user_id, name, type)` uniqueness, and the required indexes/foreign keys.
+3. Establish test helpers for database setup, cleanup, deterministic fixtures,
+   UUIDs, and a no-op injected logger.
+4. Establish mock/provider test helpers without introducing production code just
+   for test convenience.
+5. Define shared application error categories: invalid input, not found,
+   conflict, unauthorized, and internal failure.
+
+### Priority 1: Auth repository
+
+1. Write the first failing integration test: create and retrieve a user by
+   `google_id`.
+2. Implement the minimum SQL query and repository method; run `sqlc generate`.
+3. Add Red-Green-Refactor tests for existing-user upsert/update behavior.
+4. Add duplicate Google ID and duplicate email constraint tests.
+5. Add missing-user and database-error mapping tests.
+6. Complete repository cleanup and run the full Auth repository integration
+   suite against the Docker PostgreSQL instance.
+
+### Priority 2: Auth service
+
+1. Define the injectable Google verifier and JWT signer/generator boundaries.
+2. Write the failing test for valid Google identity to persisted user to JWT.
+3. Implement the smallest orchestration path and make it green.
+4. Add tests for existing users, invalid Google claims, provider failures, and
+   repository failures.
+5. Add focused JWT claim, expiration, signature, and JTI/revocation tests.
+6. Refactor service error handling and sensitive-data logging only while tests
+   remain green.
+
+### Priority 3: Auth handler, middleware, and routes
+
+1. Write the first `httptest` for successful Google login.
+2. Implement request binding and response mapping.
+3. Add malformed-input, provider-error, and generic-error HTTP tests.
+4. Write JWT middleware tests for missing, invalid, expired, and revoked tokens.
+5. Add logout tests and wire the route through the authenticated group.
+6. Add development-mode OAuth helper route tests and enforce the environment
+   gate.
+7. Finish Auth module wiring and run all Auth tests end to end.
+
+### Priority 4: Categories schema and repository
+
+1. Add or verify the migration/backfill for mandatory `type`, the allowed-value
+   check, removal of old uniqueness, and `(user_id, name, type)` uniqueness.
+2. Write the first failing integration test: duplicate same-type category is
+   rejected while same-name different-type category is accepted.
+3. Update SQL query files and run `sqlc generate`; never edit generated files.
+4. Add create, list, filtered-list, update, delete, ownership, not-found, and
+   database constraint mapping tests in the sequence defined above.
+5. Verify transaction category foreign-key behavior after category deletion.
+6. Run the complete Categories repository suite against a clean migrated
+   PostgreSQL database.
+
+### Priority 5: Categories service
+
+1. Write the failing normalization/validation test for name and type.
+2. Implement create validation and repository delegation.
+3. Add tests for valid filters, invalid filters, conflicts, not-found results,
+   update normalization, and ownership-preserving delete delegation.
+4. Refactor shared validation only after the service tests are green.
+
+### Priority 6: Categories handler and routes
+
+1. Write the first successful `POST /api/v1/categories` HTTP test with a mocked
+   service and authenticated user context.
+2. Implement request/response mapping and `201` behavior.
+3. Add invalid payload, strict-field, conflict, and internal-error tests.
+4. Add list tests for no filter, both valid filters, and invalid filter.
+5. Add update and delete tests for success, invalid UUID, not-found, conflict,
+   and `204` behavior.
+6. Register categories only under the JWT-protected API group and test that the
+   user ID always comes from middleware context.
+
+### Priority 7: Integrated verification and hardening
+
+1. Run `sqlc generate` from the final migration/query state.
+2. Run `gofmt` on changed Go files.
+3. Run all unit and integration tests with the Docker database available.
+4. Run `go test ./...`.
+5. Run `go vet ./...`.
+6. Run `go build ./...`.
+7. Exercise the documented API flows manually or with an HTTP collection:
+   Google login, logout, category create, duplicate conflict, same-name
+   different-type create, filtered list, update type, ownership denial, and
+   delete.
+8. Review logs for required structured context and confirm no token, password,
+   Google ID token, authorization header, database URL, or unnecessary PII is
+   emitted.
+
+## 5. Definition of Done
+
+- Auth repository integration tests pass against real local PostgreSQL.
+- Auth service tests pass with mocked repository and Google provider.
+- Auth handler and JWT middleware HTTP tests pass with `httptest`.
+- Categories repository integration tests prove the exact unique and check
+  constraints, including duplicate-category violations.
+- Categories service tests prove normalization, validation, ownership arguments,
+  and error propagation using mocks.
+- Categories handler tests prove every endpoint's status, response, validation,
+  authentication, and error mapping.
+- All SQL access goes through `sqlc` generated code using `pgx/v5`; no ORM is
+  introduced.
+- Category `type` is mandatory and limited to `income` or `expense`.
+- Uniqueness is exactly `(user_id, name, type)`.
+- Protected operations cannot use a client-supplied `user_id`.
+- `go test ./...`, `go vet ./...`, and `go build ./...` pass.
+- The implementation was produced through observable Red-Green-Refactor steps,
+  with no untested production behavior left in Auth or Categories.
