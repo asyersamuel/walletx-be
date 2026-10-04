@@ -3,8 +3,10 @@ package app
 import (
 	"walletx-be/configs"
 	"walletx-be/internal/middleware"
+	aihttp "walletx-be/internal/modules/ai/delivery/http"
 	"walletx-be/internal/modules/auth"
 	"walletx-be/internal/modules/categories"
+	transactionhttp "walletx-be/internal/modules/transactions/delivery/http"
 	"walletx-be/internal/modules/users"
 	platformlogger "walletx-be/internal/platform/logger"
 	"walletx-be/internal/shared/response"
@@ -36,6 +38,8 @@ func SetupRouter(modules *Modules, cfg *configs.Config, validator middleware.Tok
 			auth.RegisterProtectedRoutes(protected, modules.Auth.Handler)
 			users.RegisterProtectedRoutes(protected, modules.Users.Handler)
 			categories.RegisterProtectedRoutes(protected, modules.Categories.Handler)
+			transactionhttp.RegisterProtectedRoutes(protected, modules.Transactions.Handler)
+			aihttp.RegisterRoutes(protected, modules.AI)
 		}
 	}
 

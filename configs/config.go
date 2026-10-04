@@ -5,12 +5,15 @@ import (
 	"strconv"
 )
 
+const DefaultChatModel = "gemini-3.5-flash"
+
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	JWT      JWTConfig
 	App      AppConfig
 	OAuth    OAuthConfig
+	AI       AIConfig
 }
 
 type OAuthConfig struct {
@@ -36,6 +39,11 @@ type AppConfig struct {
 	DevMode bool
 }
 
+type AIConfig struct {
+	GeminiAPIKey string
+	ChatModel    string
+}
+
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -55,6 +63,10 @@ func Load() *Config {
 			ClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 			ClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 			RedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:8080/api/v1/auth/google/callback"),
+		},
+		AI: AIConfig{
+			GeminiAPIKey: getEnv("GEMINI_API_KEY", ""),
+			ChatModel:    getEnv("GEMINI_CHAT_MODEL", DefaultChatModel),
 		},
 	}
 }

@@ -12,16 +12,101 @@ import (
 
 type Querier interface {
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
+	// The guarded_category CTE enforces relational integrity inside the very same
+	// statement as the INSERT: the category must exist AND belong to the executing
+	// user. If the guard returns zero rows, the INSERT ... SELECT inserts nothing
+	// and this :one query returns pgx.ErrNoRows, which the repository maps to
+	// apperrors.ErrNotFound without revealing whether the category is missing or
+	// owned by another user. This removes the check-then-insert race between
+	// category validation and transaction insertion.
+	// The embedding column is intentionally omitted: it stays NULL at creation
+	// time and is filled asynchronously by the background embedding job.
+	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (CreateTransactionRow, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DeleteCategory(ctx context.Context, arg DeleteCategoryParams) (int64, error)
+	// Ownership isolation: both id AND user_id are required in the WHERE clause.
+	// Deleting a transaction owned by another user (or a missing one) affects zero
+	// rows, which the repository maps to ErrNotFound. The related category is never
+	// touched. Returns the number of rows affected.
+	DeleteTransaction(ctx context.Context, arg DeleteTransactionParams) (int64, error)
+	// Ownership isolation is enforced in the WHERE clause: the user_id predicate
+	// is combined with the transaction id, so requesting a transaction that exists
+	// but belongs to another user returns zero rows (pgx.ErrNoRows -> ErrNotFound).
+	// This never leaks whether the id exists. The embedding column is intentionally
+	// omitted; it is loaded by a later embedding iteration.
+	GetTransactionByID(ctx context.Context, arg GetTransactionByIDParams) (GetTransactionByIDRow, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByGoogleID(ctx context.Context, googleID string) (User, error)
 	GetUserByGoogleIDAny(ctx context.Context, googleID string) (User, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	ListCategoriesByUser(ctx context.Context, arg ListCategoriesByUserParams) ([]Category, error)
+	// Scope strictly to the caller. The user_id predicate lives in WHERE, so it is
+	// applied BEFORE LIMIT/OFFSET: another user's rows can never shift page
+	// boundaries or leak into results. Optional inclusive date bounds are compared
+	// against transaction_date by absolute instant (timestamptz), so rows exactly
+	// on start_date or end_date are included. A NULL bound means unbounded.
+	// Ordering is deterministic and stable: transaction_date desc, then id desc as
+	// a tie-breaker, so pagination never duplicates or skips rows across pages even
+	// when multiple transactions share the same transaction_date.
+	ListTransactions(ctx context.Context, arg ListTransactionsParams) ([]ListTransactionsRow, error)
+	// Explicit casts let sqlc type the table-valued RPC's projection.
+	MatchTransactions(ctx context.Context, arg MatchTransactionsParams) ([]MatchTransactionsRow, error)
 	Ping(ctx context.Context) (int32, error)
+	// Writes the pre-computed embedding vector for a single transaction that the
+	// caller owns. Both id AND user_id are required so a background worker cannot
+	// accidentally overwrite another user's embedding even with a valid transaction
+	// UUID. Zero rows returned means the transaction is missing or owned by a
+	// different user; the repository maps that to ErrNotFound.
+	//
+	// Encoding contract: the Go caller converts []float32 to the pgvector literal
+	// text format "[f0,f1,...,f767]" and passes it here as a text parameter. The
+	// double cast ::text::extensions.vector lets pgx simple-protocol pass a raw
+	// string and lets the database parser perform the type conversion, with no
+	// pgvector-go dependency required.
+	SaveEmbedding(ctx context.Context, arg SaveEmbeddingParams) (int64, error)
+	// Retrieves the most similar transactions for a given query embedding, strictly
+	// scoped to a single user. The vector distance uses cosine distance (<=>), so
+	// similarity = 1 - distance. Only rows whose cosine similarity exceeds
+	// match_threshold are returned, ordered best-match first.
+	//
+	// Security: user_id is the first predicate so the planner can use the
+	// (user_id, transaction_date) index even before the vector index, guaranteeing
+	// no cross-user row is ever scored or returned.
+	//
+	// Optional inclusive date bounds narrow the result set BEFORE ranking so that
+	// "what did I spend this month" questions only consider the relevant window.
+	//
+	// The embedding column is NOT returned to the caller; the query result carries
+	// business fields only. embedding IS NULL rows are excluded because they have
+	// no distance to compute.
+	//
+	// Encoding contract: same text-casting trick as SaveEmbedding.
+	SearchSimilarTransactions(ctx context.Context, arg SearchSimilarTransactionsParams) ([]SearchSimilarTransactionsRow, error)
 	SoftDeleteUser(ctx context.Context, id pgtype.UUID) (int64, error)
 	UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error)
+	// Partial, ownership-safe update. Each mutable column is written only when its
+	// matching set_<field> flag is true; otherwise the existing value is kept:
+	//     col = CASE WHEN $set_flag THEN $value ELSE col END
+	// So callers send only the fields they want to change (a "full update" simply
+	// sets every flag). The flags are derived in the repository from which domain
+	// fields are non-nil, so this is a true partial update.
+	// Why CASE + flags instead of coalesce(narg, col): amount is numeric, and sqlc
+	// maps a *nullable* numeric parameter to pgtype.Numeric, which pgx cannot
+	// encode from a bare float64 (its encoder requires the *big.Int field). Using a
+	// NON-nullable float64 value guarded by a boolean flag keeps amount a plain
+	// float64 (identical to CreateTransaction) and avoids pgtype.Numeric entirely.
+	// Security / isolation:
+	//   * WHERE id = $id AND user_id = $user -> a transaction owned by another user
+	//     (or a missing one) matches zero rows => ErrNoRows => ErrNotFound.
+	//   * The category guard runs only when set_category_id is true: then the new
+	//     category must exist AND belong to the same user (correlated EXISTS on
+	//     transactions.user_id); otherwise zero rows are updated. Both failure
+	//     modes collapse to ErrNotFound, so a caller can neither attach another
+	//     user's category nor learn whether it exists.
+	//   * user_id is never in the SET list, so ownership can never be reassigned.
+	//   * The CHECK (amount > 0) constraint still applies to any supplied amount.
+	// updated_at is always refreshed; embedding is left untouched (later iteration).
+	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (UpdateTransactionRow, error)
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
 	UpdateUserGoogleProfile(ctx context.Context, arg UpdateUserGoogleProfileParams) (User, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)

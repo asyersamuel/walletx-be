@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+	"golang.org/x/oauth2"
 	"walletx-be/internal/platform/logger"
 	apperrors "walletx-be/internal/shared/errors"
 	"walletx-be/internal/shared/response"
-	"github.com/gin-gonic/gin"
-	"golang.org/x/oauth2"
 )
 
 type Handler struct {

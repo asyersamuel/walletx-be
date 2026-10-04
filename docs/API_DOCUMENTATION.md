@@ -157,6 +157,107 @@ JWT yang tidak valid, kedaluwarsa, atau sudah di-logout menghasilkan `401 Unauth
 Blacklist token saat ini disimpan di memory proses API; token
 akan hilang ketika proses restart.
 
+## Transactions
+
+Semua endpoint transaction membutuhkan JWT valid.
+
+```http
+POST /api/v1/transactions
+GET /api/v1/transactions
+GET /api/v1/transactions/:id
+PATCH /api/v1/transactions/:id
+DELETE /api/v1/transactions/:id
+POST /api/v1/transactions/chat
+POST /api/v1/transactions/receipt
+```
+
+`POST /transactions` menerima body JSON dengan field `category_id`,
+`category_name`, `merchant_name`, `amount`, dan `transaction_date`. Field
+`receipt_image_url` dan `notes` bersifat opsional. `transaction_date` harus
+menggunakan format RFC3339, contohnya `2026-09-20T12:00:00Z`.
+
+`POST /transactions/receipt` menerima upload multipart dengan field file
+`receipt`. Endpoint chat sudah dihubungkan ke provider Gemini melalui adapter
+generasi teks sinkron. Adapter dasar ini belum menghasilkan tool call;
+`AgentService` masih mengembalikan teks fallback untuk respons tanpa tool call.
+Endpoint receipt memerlukan implementasi receipt service yang di-inject;
+tanpa service tersebut endpoint mengembalikan `503 Service Unavailable`.
+
+## AI advisor dan extraction
+
+Endpoint berikut membutuhkan JWT melalui `Authorization: Bearer <token>`.
+User ID selalu diambil dari JWT; field identitas dalam body tidak diterima.
+Model chat dapat dikonfigurasi melalui `GEMINI_CHAT_MODEL` (default
+`gemini-3.8-flash`). Embedding query memakai model dan dimensi yang sama dengan
+index transaction (`gemini-embedding-2`, 768).
+
+### POST /api/v1/ai/chat
+
+Body JSON (maksimum 1 MiB):
+
+```json
+{
+  "prompt": "Ringkas pengeluaran saya",
+  "personalized": true,
+  "isThinking": true,
+  "history": [
+    {"role": "user", "parts": [{"text": "Saya ingin menabung"}]}
+  ]
+}
+```
+
+Response sukses memakai `text/event-stream`. Setiap event segera di-flush:
+
+```text
+event: thought
+data: {"text":"..."}
+
+event: answer
+data: {"text":"**Ringkasan**\n..."}
+
+event: complete
+data: {"message":{"role":"assistant","parts":[{"text":"**Ringkasan**\n..."}]}}
+```
+
+`thought` dan `answer` berisi delta Markdown mentah. Frontend merendernya dan
+menyimpan `complete.message` untuk dikirim kembali dalam `history`, termasuk
+`thoughtSignature` yang opaque jika ada. Backend tidak menyimpan history antar
+request. Kegagalan setelah stream dimulai menghasilkan terminal
+`event: error` dengan `data: {"message":"AI chat failed"}`. Kegagalan sebelum
+stream dimulai memakai response JSON dan HTTP status biasa. Disconnect
+membatalkan generation. Karena endpoint menggunakan POST, frontend memakai
+streaming fetch, bukan native EventSource.
+
+### POST /api/v1/ai/extract
+
+Share-sheet text memakai JSON (maksimum 1 MiB):
+
+```json
+{"text":"Bayar kopi 25000 hari ini", "timeZone":"Asia/Jakarta"}
+```
+
+Receipt memakai `multipart/form-data` dengan tepat satu file bernama `image`
+(maksimum 10 MiB), dan field `timeZone` opsional. MIME dideteksi dari bytes.
+Jangan mengirim text dan image bersamaan. `timeZone` harus berupa zona IANA;
+default `Asia/Jakarta`. Waktu referensi diisi server. Kategori diambil dari
+database milik user dan hasil divalidasi terhadap kategori tersebut.
+
+Response `200 OK` memakai envelope API biasa; `data` berisi:
+
+```json
+{
+  "amount": 25000,
+  "merchant": "Coffee Shop",
+  "category_id": "11111111-1111-4111-8111-111111111111",
+  "notes": null,
+  "date": "2026-10-03"
+}
+```
+
+Extraction menghasilkan draft; endpoint ini tidak menyimpan transaction.
+Body terlalu besar menghasilkan `413`, media type request yang tidak
+didukung menghasilkan `415`.
+
 ## Status dan error
 
 - `200 OK` — request berhasil.

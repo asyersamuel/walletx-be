@@ -48,8 +48,17 @@ func TimePtr(value pgtype.Timestamptz) *time.Time {
 	if !value.Valid {
 		return nil
 	}
-	result := value.Time
-	return &result
+	return &value.Time
+}
+
+// NullableTimeParam converts a *time.Time into a pgtype.Timestamptz suitable
+// for use as a nullable SQL parameter. A nil pointer produces a NULL value
+// (Valid=false), which callers use to mean "no bound"/"no filter".
+func NullableTimeParam(value *time.Time) pgtype.Timestamptz {
+	if value == nil {
+		return pgtype.Timestamptz{}
+	}
+	return TimeParam(*value)
 }
 
 func DateParam(value time.Time) pgtype.Date {
