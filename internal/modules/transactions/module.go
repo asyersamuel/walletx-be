@@ -21,14 +21,14 @@ type Module struct {
 }
 
 // NewModule wires transaction dependencies: repository -> service -> handler.
-func NewModule(queries *db.Queries, appLogger logger.Logger, embedding EmbeddingProvider, toolGenerator infrastructure.LLMGenerator, extractor transactionservice.ReceiptExtractor, categoryReader ai.CategoryReader) (*Module, error) {
+func NewModule(queries *db.Queries, appLogger logger.Logger, embedding EmbeddingProvider, toolGenerator infrastructure.LLMGenerator, extractor transactionservice.ReceiptExtractor, categoryReader ai.CategoryReader, receiptStorage ReceiptStorage, extractionTimeout time.Duration) (*Module, error) {
 	location, err := time.LoadLocation("Asia/Jakarta")
 	if err != nil {
 		return nil, fmt.Errorf("load receipt timezone: %w", err)
 	}
 	repo := postgres.NewTransactionRepository(queries, appLogger)
-	service := transactionservice.NewTransactionServiceWithLogger(repo, embedding, appLogger)
-	receiptService, err := transactionservice.NewReceiptService(extractor, categoryReader, service, location, time.Now)
+	service := transactionservice.NewTransactionServiceWithLogger(repo, embedding, appLogger, receiptStorage)
+	receiptService, err := transactionservice.NewReceiptService(extractor, categoryReader, service, receiptStorage, appLogger, extractionTimeout, location, time.Now)
 	if err != nil {
 		return nil, fmt.Errorf("initialize receipt service: %w", err)
 	}

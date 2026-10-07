@@ -9,15 +9,15 @@
 -- The embedding column is intentionally omitted: it stays NULL at creation
 -- time and is filled asynchronously by the background embedding job.
 with guarded_category as (
-    select id
-    from public.categories
-    where id = sqlc.arg(category_id)
-      and user_id = sqlc.arg(user_id)
+    select c.id
+    from public.categories c
+    where c.id = sqlc.arg(category_id)
+      and c.user_id = sqlc.arg(user_id)
     for share
 )
 insert into public.transactions (
     user_id, category_id, merchant_name, amount,
-    transaction_date, receipt_image_url, notes
+    transaction_date, receipt_image_url, notes, status
 )
 select
     sqlc.arg(user_id),
@@ -26,11 +26,52 @@ select
     sqlc.arg(amount),
     sqlc.arg(transaction_date),
     sqlc.narg(receipt_image_url),
-    sqlc.narg(notes)
+    sqlc.narg(notes),
+    'success'
 from guarded_category
 returning id, user_id, category_id, merchant_name, amount,
     transaction_date, receipt_image_url, notes,
-    created_at, updated_at;
+    created_at, updated_at, status;
+
+-- name: CreatePendingTransaction :one
+-- The receipt reference is durable before AI processing. Extraction fields are
+-- explicitly NULL; no category lookup is needed until completion.
+insert into public.transactions (
+    user_id, receipt_image_url, status,
+    amount, merchant_name, category_id, transaction_date
+)
+values (
+    sqlc.arg(user_id), sqlc.arg(receipt_image_url), 'pending',
+    NULL, NULL, NULL, NULL
+)
+returning id, user_id, receipt_image_url, created_at, updated_at, status;
+
+-- name: CompletePendingTransaction :one
+-- Lock the owned category for the duration of this statement, preserving the
+-- same category-deletion race protection as CreateTransaction. The status guard
+-- makes concurrent completion have only one winner and prevents overwrites.
+with guarded_category as (
+    select c.id
+    from public.categories c
+    where c.id = sqlc.arg(category_id)
+      and c.user_id = sqlc.arg(user_id)
+    for share
+)
+update public.transactions as t
+set category_id = guarded_category.id,
+    merchant_name = sqlc.arg(merchant_name),
+    amount = sqlc.arg(amount),
+    transaction_date = sqlc.arg(transaction_date),
+    notes = sqlc.narg(notes),
+    status = 'success',
+    updated_at = now()
+from guarded_category
+where t.id = sqlc.arg(id)
+  and t.user_id = sqlc.arg(user_id)
+  and t.status = 'pending'
+returning t.id, t.user_id, t.category_id, t.merchant_name, t.amount,
+    t.transaction_date, t.receipt_image_url, t.notes,
+    t.created_at, t.updated_at, t.status;
 
 -- name: GetTransactionByID :one
 -- Ownership isolation is enforced in the WHERE clause: the user_id predicate
@@ -39,7 +80,18 @@ returning id, user_id, category_id, merchant_name, amount,
 -- This never leaks whether the id exists. The embedding column is intentionally
 -- omitted; it is loaded by a later embedding iteration.
 select id, user_id, category_id, merchant_name, amount, transaction_date,
-    receipt_image_url, notes, created_at, updated_at
+    receipt_image_url, notes, created_at, updated_at, status
+from public.transactions
+where id = sqlc.arg(id)
+  and user_id = sqlc.arg(user_id)
+  and status = 'success'
+limit 1;
+
+-- name: GetTransactionForDeletion :one
+-- Internal owner-scoped lookup includes pending receipts so deletion can clean
+-- their storage objects even though main GET/list hides them.
+select id, user_id, category_id, merchant_name, amount, transaction_date,
+    receipt_image_url, notes, created_at, updated_at, status
 from public.transactions
 where id = sqlc.arg(id)
   and user_id = sqlc.arg(user_id)
@@ -54,10 +106,12 @@ limit 1;
 -- Ordering is deterministic and stable: transaction_date desc, then id desc as
 -- a tie-breaker, so pagination never duplicates or skips rows across pages even
 -- when multiple transactions share the same transaction_date.
+-- Only successful transactions are visible, including before pagination.
 select id, user_id, category_id, merchant_name, amount, transaction_date,
-    receipt_image_url, notes, created_at, updated_at
+    receipt_image_url, notes, created_at, updated_at, status
 from public.transactions
 where user_id = sqlc.arg(user_id)
+  and status = 'success'
   and (
       sqlc.narg(start_date)::timestamptz is null
       or transaction_date >= sqlc.narg(start_date)::timestamptz
@@ -77,11 +131,8 @@ offset sqlc.arg(row_offset);
 -- So callers send only the fields they want to change (a "full update" simply
 -- sets every flag). The flags are derived in the repository from which domain
 -- fields are non-nil, so this is a true partial update.
--- Why CASE + flags instead of coalesce(narg, col): amount is numeric, and sqlc
--- maps a *nullable* numeric parameter to pgtype.Numeric, which pgx cannot
--- encode from a bare float64 (its encoder requires the *big.Int field). Using a
--- NON-nullable float64 value guarded by a boolean flag keeps amount a plain
--- float64 (identical to CreateTransaction) and avoids pgtype.Numeric entirely.
+-- CASE + flags distinguishes omitted fields from explicitly cleared optional
+-- fields. Nullable numeric parameters are encoded as pgtype.Numeric.
 -- Security / isolation:
 --   * WHERE id = $id AND user_id = $user -> a transaction owned by another user
 --     (or a missing one) matches zero rows => ErrNoRows => ErrNotFound.
@@ -103,6 +154,7 @@ set merchant_name     = case when sqlc.arg(set_merchant_name)::boolean then sqlc
     updated_at        = now()
 where public.transactions.id = sqlc.arg(id)
   and public.transactions.user_id = sqlc.arg(user_id)
+  and public.transactions.status = 'success'
   and (
       sqlc.arg(set_category_id)::boolean = false
       or exists (
@@ -114,7 +166,7 @@ where public.transactions.id = sqlc.arg(id)
   )
 returning id, user_id, category_id, merchant_name, amount,
     transaction_date, receipt_image_url, notes,
-    created_at, updated_at;
+    created_at, updated_at, status;
 
 -- name: DeleteTransaction :execrows
 -- Ownership isolation: both id AND user_id are required in the WHERE clause.
@@ -142,6 +194,7 @@ set embedding   = sqlc.arg(embedding)::text::extensions.vector,
     updated_at  = now()
 where public.transactions.id      = sqlc.arg(id)
   and public.transactions.user_id = sqlc.arg(user_id)
+  and public.transactions.status = 'success'
   and public.transactions.updated_at = sqlc.arg(updated_at);
 
 -- name: SearchSimilarTransactions :many
@@ -170,6 +223,7 @@ select
     t.amount,
     t.transaction_date,
     t.notes,
+    t.status,
     c.name                                               as category_name,
     c.type                                               as category_type,
     (1.0 - (t.embedding <=> sqlc.arg(query_embedding)::text::extensions.vector))::float8 as similarity
@@ -178,6 +232,7 @@ left join public.categories c
     on c.id = t.category_id
    and c.user_id = t.user_id
 where t.user_id   = sqlc.arg(user_id)
+  and t.status = 'success'
   and t.embedding is not null
   and (1.0 - (t.embedding <=> sqlc.arg(query_embedding)::text::extensions.vector))::float8
           >= sqlc.arg(match_threshold)::float8

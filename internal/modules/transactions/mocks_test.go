@@ -50,6 +50,12 @@ func (m *mockTransactionRepository) GetTransactionByID(ctx context.Context, user
 	return transaction, args.Error(1)
 }
 
+func (m *mockTransactionRepository) GetTransactionForDeletion(ctx context.Context, userID, transactionID uuid.UUID) (*Transaction, error) {
+	args := m.Called(ctx, userID, transactionID)
+	transaction, _ := args.Get(0).(*Transaction)
+	return transaction, args.Error(1)
+}
+
 func (m *mockTransactionRepository) ListTransactions(ctx context.Context, input ListTransactionsInput) ([]Transaction, error) {
 	args := m.Called(ctx, input)
 	transactions, _ := args.Get(0).([]Transaction)
@@ -94,3 +100,15 @@ func (m *mockTransactionRepository) NumberOfCalls(methodName string) int {
 }
 
 var _ TransactionRepository = (*mockTransactionRepository)(nil)
+
+func (m *mockTransactionRepository) CreatePendingTransaction(ctx context.Context, input CreatePendingTransactionInput) (*PendingTransaction, error) {
+	args := m.Called(ctx, input)
+	result, _ := args.Get(0).(*PendingTransaction)
+	return result, args.Error(1)
+}
+
+func (m *mockTransactionRepository) CompletePendingTransaction(ctx context.Context, input CompletePendingTransactionInput) (*Transaction, error) {
+	args := m.Called(ctx, input)
+	result, _ := args.Get(0).(*Transaction)
+	return result, args.Error(1)
+}

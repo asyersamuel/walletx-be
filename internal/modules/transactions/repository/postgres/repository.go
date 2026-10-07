@@ -25,18 +25,22 @@ type transactionRepository struct {
 }
 
 // NewTransactionRepository builds the repository on top of the generated sqlc
-// queries. All SQL access goes through sqlc/pgx; there is no ORM and no
-// hand-written data mapper.
+// queries. SQL access goes through sqlc/pgx; checked mapping keeps nullable
+// persistence representations out of the domain.
 func NewTransactionRepository(queries *sqlc.Queries, appLogger logger.Logger) domain.TransactionRepository {
 	return &transactionRepository{queries: queries, logger: appLogger}
 }
 
 func (r *transactionRepository) Create(ctx context.Context, input domain.CreateTransactionInput) (*domain.Transaction, error) {
+	amount, err := amountParam(input.Amount)
+	if err != nil {
+		return nil, err
+	}
 	row, err := r.queries.CreateTransaction(ctx, sqlc.CreateTransactionParams{
 		UserID:          database.UUIDParam(input.UserID),
 		CategoryID:      database.UUIDParam(input.CategoryID),
-		MerchantName:    input.MerchantName,
-		Amount:          input.Amount,
+		MerchantName:    &input.MerchantName,
+		Amount:          amount,
 		TransactionDate: database.TimeParam(input.TransactionDate),
 		ReceiptImageUrl: input.ReceiptImageUrl,
 		Notes:           input.Notes,
@@ -66,14 +70,39 @@ func (r *transactionRepository) Create(ctx context.Context, input domain.CreateT
 		r.logger.WithError(err).Error("failed to create transaction")
 		return nil, err
 	}
-	txn := transactionFrom(row.ID, row.UserID, row.CategoryID, row.MerchantName,
+	txn, err := transactionFrom(row.ID, row.UserID, row.CategoryID, row.MerchantName,
 		row.Amount, row.TransactionDate, row.ReceiptImageUrl, row.Notes,
-		row.CreatedAt, row.UpdatedAt)
+		row.CreatedAt, row.UpdatedAt, row.Status)
+	if err != nil {
+		return nil, err
+	}
 	return &txn, nil
 }
 
 func (r *transactionRepository) GetTransactionByID(ctx context.Context, userID, transactionID uuid.UUID) (*domain.Transaction, error) {
 	row, err := r.queries.GetTransactionByID(ctx, sqlc.GetTransactionByIDParams{
+		ID:     database.UUIDParam(transactionID),
+		UserID: database.UUIDParam(userID),
+	})
+	if err != nil {
+		// Pending, missing and foreign transactions all map to ErrNotFound.
+		if database.IsNoRows(err) {
+			return nil, apperrors.ErrNotFound
+		}
+		r.logger.WithError(err).Error("failed to get transaction")
+		return nil, err
+	}
+	txn, err := transactionFrom(row.ID, row.UserID, row.CategoryID, row.MerchantName,
+		row.Amount, row.TransactionDate, row.ReceiptImageUrl, row.Notes,
+		row.CreatedAt, row.UpdatedAt, row.Status)
+	if err != nil {
+		return nil, err
+	}
+	return &txn, nil
+}
+
+func (r *transactionRepository) GetTransactionForDeletion(ctx context.Context, userID, transactionID uuid.UUID) (*domain.Transaction, error) {
+	row, err := r.queries.GetTransactionForDeletion(ctx, sqlc.GetTransactionForDeletionParams{
 		ID:     database.UUIDParam(transactionID),
 		UserID: database.UUIDParam(userID),
 	})
@@ -87,9 +116,12 @@ func (r *transactionRepository) GetTransactionByID(ctx context.Context, userID, 
 		r.logger.WithError(err).Error("failed to get transaction")
 		return nil, err
 	}
-	txn := transactionFrom(row.ID, row.UserID, row.CategoryID, row.MerchantName,
+	txn, err := transactionFrom(row.ID, row.UserID, row.CategoryID, row.MerchantName,
 		row.Amount, row.TransactionDate, row.ReceiptImageUrl, row.Notes,
-		row.CreatedAt, row.UpdatedAt)
+		row.CreatedAt, row.UpdatedAt, row.Status)
+	if err != nil {
+		return nil, err
+	}
 	return &txn, nil
 }
 
@@ -121,25 +153,37 @@ func (r *transactionRepository) ListTransactions(ctx context.Context, input doma
 	// range over / JSON-marshal the result without a nil check.
 	result := make([]domain.Transaction, len(rows))
 	for i, row := range rows {
-		result[i] = transactionFrom(row.ID, row.UserID, row.CategoryID, row.MerchantName,
+		txn, err := transactionFrom(row.ID, row.UserID, row.CategoryID, row.MerchantName,
 			row.Amount, row.TransactionDate, row.ReceiptImageUrl, row.Notes,
-			row.CreatedAt, row.UpdatedAt)
+			row.CreatedAt, row.UpdatedAt, row.Status)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = txn
 	}
 	return result, nil
 }
 
 func (r *transactionRepository) UpdateTransaction(ctx context.Context, input domain.UpdateTransactionInput) (*domain.Transaction, error) {
+	var amount pgtype.Numeric
+	if input.Amount != nil {
+		var err error
+		amount, err = amountParam(*input.Amount)
+		if err != nil {
+			return nil, err
+		}
+	}
 	row, err := r.queries.UpdateTransaction(ctx, sqlc.UpdateTransactionParams{
 		ID:     database.UUIDParam(input.TransactionID),
 		UserID: database.UUIDParam(input.UserID),
 
 		// Each set-flag is derived from the matching pointer being non-nil, so
 		// the SQL CASE writes only the fields the caller supplied. The value
-		// passed alongside a false flag is a harmless zero (the CASE ignores it).
+		// passed alongside a false flag may be NULL (the CASE ignores it).
 		SetMerchantName:    input.MerchantName != nil,
-		MerchantName:       derefString(input.MerchantName),
+		MerchantName:       input.MerchantName,
 		SetAmount:          input.Amount != nil,
-		Amount:             derefFloat64(input.Amount),
+		Amount:             amount,
 		SetTransactionDate: input.TransactionDate != nil,
 		TransactionDate:    database.NullableTimeParam(input.TransactionDate),
 		SetCategoryID:      input.CategoryID != nil,
@@ -169,9 +213,12 @@ func (r *transactionRepository) UpdateTransaction(ctx context.Context, input dom
 		r.logger.WithError(err).Error("failed to update transaction")
 		return nil, err
 	}
-	txn := transactionFrom(row.ID, row.UserID, row.CategoryID, row.MerchantName,
+	txn, err := transactionFrom(row.ID, row.UserID, row.CategoryID, row.MerchantName,
 		row.Amount, row.TransactionDate, row.ReceiptImageUrl, row.Notes,
-		row.CreatedAt, row.UpdatedAt)
+		row.CreatedAt, row.UpdatedAt, row.Status)
+	if err != nil {
+		return nil, err
+	}
 	return &txn, nil
 }
 
@@ -239,18 +286,11 @@ func (r *transactionRepository) SearchSimilarTransactions(ctx context.Context, i
 
 	result := make([]domain.SimilarTransaction, len(rows))
 	for i, row := range rows {
-		result[i] = domain.SimilarTransaction{
-			ID:              database.UUIDValue(row.ID),
-			UserID:          database.UUIDValue(row.UserID),
-			CategoryID:      database.UUIDPtr(row.CategoryID),
-			MerchantName:    row.MerchantName,
-			Amount:          row.Amount,
-			TransactionDate: database.TimeValue(row.TransactionDate),
-			Notes:           row.Notes,
-			CategoryName:    row.CategoryName,
-			CategoryType:    row.CategoryType,
-			Similarity:      row.Similarity,
+		item, err := similarTransactionFrom(row)
+		if err != nil {
+			return nil, err
 		}
+		result[i] = item
 	}
 	return result, nil
 }
@@ -273,57 +313,6 @@ func embeddingLiteral(embedding []float32) (string, error) {
 	}
 	builder.WriteByte(']')
 	return builder.String(), nil
-}
-
-// derefString returns *p, or "" when p is nil. Used to supply a harmless value
-// for columns whose set-flag is false (the SQL CASE ignores it).
-func derefString(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-
-// derefFloat64 returns *p, or 0 when p is nil. Used to supply a harmless value
-// for amount when its set-flag is false (the SQL CASE ignores it, so the stored
-// positive amount is preserved and the CHECK constraint is not tripped).
-func derefFloat64(p *float64) float64 {
-	if p == nil {
-		return 0
-	}
-	return *p
-}
-
-// transactionFrom maps the columns shared by every transaction row projection
-// (CreateTransaction RETURNING, GetTransactionByID, and ListTransactions) to the
-// domain model. sqlc emits a distinct generated struct per query even though
-// these three select identical columns, so each call site passes its fields
-// into this single mapping function to keep the logic DRY.
-//
-// The embedding column is intentionally not projected by any of these queries
-// yet, so Embedding stays nil; it will be populated by a later embedding
-// iteration (async generation + RAG retrieval).
-func transactionFrom(
-	id, userID, categoryID pgtype.UUID,
-	merchantName string,
-	amount float64,
-	transactionDate pgtype.Timestamptz,
-	receiptImageUrl, notes *string,
-	createdAt, updatedAt pgtype.Timestamptz,
-) domain.Transaction {
-	return domain.Transaction{
-		ID:              database.UUIDValue(id),
-		UserID:          database.UUIDValue(userID),
-		CategoryID:      database.UUIDPtr(categoryID),
-		MerchantName:    merchantName,
-		Amount:          amount,
-		TransactionDate: database.TimeValue(transactionDate),
-		ReceiptImageUrl: receiptImageUrl,
-		Notes:           notes,
-		Embedding:       nil,
-		CreatedAt:       database.TimeValue(createdAt),
-		UpdatedAt:       database.TimeValue(updatedAt),
-	}
 }
 
 // Ensure the concrete type satisfies the interface at compile time.

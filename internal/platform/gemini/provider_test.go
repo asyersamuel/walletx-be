@@ -425,7 +425,10 @@ func TestProviderExtractionRejectsInvalidJSON(t *testing.T) {
 	valid := extractionJSON()
 	cases := []struct{ name, text string }{
 		{"empty", ""}, {"malformed", "{"}, {"array", "[" + valid + "]"},
-		{"markdown fence", "```json\n" + valid + "\n```"},
+		{"unclosed fence", "```json\n" + valid},
+		{"unsupported fence language", "```javascript\n" + valid + "\n```"},
+		{"prose outside fence", "Here is JSON:\n```json\n" + valid + "\n```"},
+		{"trailing text after fence", "```json\n" + valid + "\n``` extra"},
 		{"unknown field", strings.Replace(valid, `"notes":null`, `"notes":null,"currency":"IDR"`, 1)},
 		{"duplicate field", strings.Replace(valid, `"amount":125000`, `"amount":125000,"amount":1`, 1)},
 		{"missing notes", strings.Replace(valid, `,"notes":null`, "", 1)},
@@ -453,6 +456,73 @@ func TestProviderExtractionRejectsInvalidJSON(t *testing.T) {
 			assert.Equal(t, ai.ExtractedTransaction{}, got)
 		})
 	}
+}
+
+func TestProviderExtractionAcceptsFencedJSON(t *testing.T) {
+	for _, text := range []string{
+		extractionJSON(), "  \n" + extractionJSON() + "\n ",
+		"```json\n" + extractionJSON() + "\n```",
+		"```\n" + extractionJSON() + "\n```",
+		" \r\n```JSON\r\n" + extractionJSON() + "\r\n```\r\n ",
+	} {
+		p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+			writeJSONResponse(t, w, generationResponse(genai.FinishReasonStop, &genai.Part{Text: text}))
+		})
+		got, err := p.ExtractTransaction(context.Background(), extractionFixture())
+		require.NoError(t, err)
+		require.Equal(t, "Coffee Corner", got.Merchant)
+		require.Equal(t, 125000.0, got.Amount)
+	}
+}
+
+func TestExtractionDiagnosticsIdentifyParserAndGenerationFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, reason string
+		finish             genai.FinishReason
+	}{
+		{"incomplete JSON", "{", "extraction_json_incomplete", genai.FinishReasonStop},
+		{"unknown field", strings.Replace(extractionJSON(), `"notes":null`, `"notes":null,"unexpected":1`, 1), "extraction_unknown_field", genai.FinishReasonStop},
+		{"duplicate field in fence", "```json\n" + strings.Replace(extractionJSON(), `"amount":125000`, `"amount":125000,"amount":1`, 1) + "\n```", "extraction_duplicate_field", genai.FinishReasonStop},
+		{"token limit", "partial", "extraction_output_token_limit", genai.FinishReasonMaxTokens},
+		{"blocked", "", "extraction_generation_blocked", genai.FinishReasonSafety},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+				writeJSONResponse(t, w, generationResponse(tc.finish, &genai.Part{Text: tc.text}))
+			})
+			_, err := p.ExtractTransaction(context.Background(), extractionFixture())
+			require.ErrorIs(t, err, apperrors.ErrInternal)
+			var diagnostic interface{ SafeLogFields() map[string]interface{} }
+			require.ErrorAs(t, err, &diagnostic)
+			require.Equal(t, tc.reason, diagnostic.SafeLogFields()["provider_reason"])
+			require.Equal(t, "gemini-chat-test", diagnostic.SafeLogFields()["provider_model"])
+		})
+	}
+}
+
+func TestExtractionDiagnosticRetainsActualAPIError(t *testing.T) {
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		writeJSONResponse(t, w, map[string]any{"error": map[string]any{
+			"code": 404, "status": "NOT_FOUND", "message": "Model is no longer available to new users; secret receipt content",
+		}})
+	})
+	_, err := p.ExtractTransaction(context.Background(), extractionFixture())
+	var sdkError genai.APIError
+	require.ErrorAs(t, err, &sdkError)
+	require.Contains(t, sdkError.Message, "no longer available")
+	require.ErrorIs(t, err, apperrors.ErrInternal)
+	var diagnostic interface {
+		SafeLogFields() map[string]interface{}
+		SafeLogError() error
+	}
+	require.ErrorAs(t, err, &diagnostic)
+	fields := diagnostic.SafeLogFields()
+	require.Equal(t, 404, fields["provider_http_code"])
+	require.Equal(t, "gemini-chat-test", fields["provider_model"])
+	require.Equal(t, "model_access_restricted", fields["provider_reason"])
+	require.Contains(t, diagnostic.SafeLogError().Error(), "404")
+	require.NotContains(t, diagnostic.SafeLogError().Error(), "secret")
 }
 
 func TestProviderErrorsRetainSDKCause(t *testing.T) {

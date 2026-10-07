@@ -21,14 +21,15 @@ type Transaction struct {
 	ID              pgtype.UUID        `json:"id"`
 	UserID          pgtype.UUID        `json:"user_id"`
 	CategoryID      pgtype.UUID        `json:"category_id"`
-	MerchantName    string             `json:"merchant_name"`
-	Amount          float64            `json:"amount"`
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
 	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
 	ReceiptImageUrl *string            `json:"receipt_image_url"`
 	Notes           *string            `json:"notes"`
 	Embedding       interface{}        `json:"embedding"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Status          string             `json:"status"`
 }
 
 type User struct {

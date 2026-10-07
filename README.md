@@ -98,3 +98,6 @@ Detail request dan response tersedia di
 File di `internal/platform/database/sqlc` dihasilkan otomatis dan tidak boleh
 diedit manual. Lihat [docs/DATABASE_MIGRATIONS.md](docs/DATABASE_MIGRATIONS.md)
 untuk workflow database yang lebih lengkap.
+
+Receipt storage configuration and 201/202 response behavior are documented in
+[Receipt processing](docs/RECEIPT_PROCESSING.md).

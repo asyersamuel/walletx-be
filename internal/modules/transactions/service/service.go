@@ -28,6 +28,7 @@ type transactionService struct {
 	repo      domain.TransactionRepository
 	embedding domain.EmbeddingProvider
 	logger    logger.Logger
+	storage   domain.ReceiptStorage
 	jobCfg    jobs.EmbeddingJobConfig
 }
 
@@ -55,11 +56,13 @@ func NewTransactionServiceWithLogger(
 	repo domain.TransactionRepository,
 	embedding domain.EmbeddingProvider,
 	appLogger logger.Logger,
+	receiptStorage domain.ReceiptStorage,
 ) domain.TransactionService {
 	return &transactionService{
 		repo:      repo,
 		embedding: embedding,
 		logger:    appLogger,
+		storage:   receiptStorage,
 		jobCfg:    defaultEmbeddingJobConfig,
 	}
 }
@@ -81,44 +84,16 @@ func (l nopServiceLogger) WithFields(map[string]interface{}) logger.Logger { ret
 // delegates persistence using the authenticated user ID. The request cannot
 // override ownership through input.UserID.
 func (s *transactionService) CreateTransaction(ctx context.Context, userID uuid.UUID, input domain.CreateTransactionInput) (*domain.Transaction, error) {
-	if userID == uuid.Nil {
-		return nil, invalidInputError("user ID must not be empty")
+	input, err := normalizeCreateInput(userID, input)
+	if err != nil {
+		return nil, err
 	}
-	if input.CategoryID == uuid.Nil {
-		return nil, invalidInputError("category ID must not be empty")
-	}
-	if input.Amount <= 0 || math.IsNaN(input.Amount) || math.IsInf(input.Amount, 0) {
-		return nil, errAmountMustBePositive
-	}
-
-	merchantName := strings.TrimSpace(input.MerchantName)
-	if merchantName == "" {
-		return nil, invalidInputError("merchant name must not be empty")
-	}
-	if input.TransactionDate.IsZero() {
-		return nil, invalidInputError("transaction date must not be empty")
-	}
-
-	input.UserID = userID
-	input.MerchantName = merchantName
 	created, err := s.repo.Create(ctx, input)
 	if err != nil {
 		return nil, mapRepositoryError(err)
 	}
 
-	if s.embedding != nil {
-		// Embedding generation is deliberately detached from the request context:
-		// the transaction has already committed and must still be embedded if the
-		// caller disconnects or the request context is canceled.
-		job := jobs.NewEmbeddingJob(s.repo, s.embedding, s.logger, s.jobCfg)
-		inp := jobs.EmbeddingJobInput{
-			TransactionID: created.ID,
-			UserID:        created.UserID,
-			UpdatedAt:     created.UpdatedAt,
-			Text:          embeddingText(*created, input.CategoryName),
-		}
-		go func() { _ = job.Run(context.Background(), inp) }()
-	}
+	s.enqueueEmbedding(created, input.CategoryName)
 	return created, nil
 }
 
@@ -199,11 +174,37 @@ func (s *transactionService) UpdateTransaction(ctx context.Context, userID, tran
 }
 
 func (s *transactionService) DeleteTransaction(ctx context.Context, userID, transactionID uuid.UUID) error {
-	if userID == uuid.Nil || transactionID == uuid.Nil {
+	if ctx == nil || userID == uuid.Nil || transactionID == uuid.Nil {
 		return invalidInputError("user ID and transaction ID must not be empty")
+	}
+	transaction, err := s.repo.GetTransactionForDeletion(ctx, userID, transactionID)
+	if err != nil {
+		return mapRepositoryError(err)
+	}
+	if transaction == nil || transaction.ID != transactionID || transaction.UserID != userID {
+		return apperrors.ErrInternal
 	}
 	if err := s.repo.DeleteTransaction(ctx, userID, transactionID); err != nil {
 		return mapRepositoryError(err)
+	}
+	// Clean only after confirmed DB deletion. A failed/uncertain delete must not
+	// remove an image that may still belong to a persisted transaction.
+	if transaction.ReceiptImageUrl != nil && strings.TrimSpace(*transaction.ReceiptImageUrl) != "" {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), receiptCleanupTimeout)
+		defer cancel()
+		var cleanupErr error
+		if s.storage == nil {
+			cleanupErr = apperrors.ErrInternal
+		} else {
+			cleanupErr = s.storage.DeleteReceipt(cleanupCtx, userID, *transaction.ReceiptImageUrl)
+		}
+		if cleanupErr != nil {
+			safe := apperrors.ErrInternal
+			if errors.Is(cleanupErr, context.DeadlineExceeded) {
+				safe = context.DeadlineExceeded
+			}
+			s.logger.WithError(safe).WithFields(map[string]interface{}{"operation": "delete_transaction_receipt", "dependency": "storage"}).Error("transaction deleted but receipt cleanup failed")
+		}
 	}
 	return nil
 }
@@ -291,4 +292,44 @@ func mapRepositoryError(err error) error {
 		return err
 	}
 	return apperrors.ErrInternal
+}
+
+func normalizeCreateInput(userID uuid.UUID, input domain.CreateTransactionInput) (domain.CreateTransactionInput, error) {
+	if userID == uuid.Nil {
+		return domain.CreateTransactionInput{}, invalidInputError("user ID must not be empty")
+	}
+	if input.CategoryID == uuid.Nil {
+		return domain.CreateTransactionInput{}, invalidInputError("category ID must not be empty")
+	}
+	if input.Amount <= 0 || math.IsNaN(input.Amount) || math.IsInf(input.Amount, 0) {
+		return domain.CreateTransactionInput{}, errAmountMustBePositive
+	}
+
+	merchantName := strings.TrimSpace(input.MerchantName)
+	if merchantName == "" {
+		return domain.CreateTransactionInput{}, invalidInputError("merchant name must not be empty")
+	}
+	if input.TransactionDate.IsZero() {
+		return domain.CreateTransactionInput{}, invalidInputError("transaction date must not be empty")
+	}
+
+	input.UserID = userID
+	input.MerchantName = merchantName
+	return input, nil
+}
+
+func (s *transactionService) enqueueEmbedding(created *domain.Transaction, categoryName string) {
+	if s.embedding != nil {
+		// Embedding generation is deliberately detached from the request context:
+		// the transaction has already committed and must still be embedded if the
+		// caller disconnects or the request context is canceled.
+		job := jobs.NewEmbeddingJob(s.repo, s.embedding, s.logger, s.jobCfg)
+		inp := jobs.EmbeddingJobInput{
+			TransactionID: created.ID,
+			UserID:        created.UserID,
+			UpdatedAt:     created.UpdatedAt,
+			Text:          embeddingText(*created, categoryName),
+		}
+		go func() { _ = job.Run(context.Background(), inp) }()
+	}
 }

@@ -22,6 +22,7 @@ import (
 	db "walletx-be/internal/platform/database/sqlc"
 	"walletx-be/internal/platform/gemini"
 	"walletx-be/internal/platform/logger"
+	"walletx-be/internal/platform/storage"
 )
 
 type moduleLogger struct{ debugCalls int }
@@ -102,7 +103,9 @@ func TestModuleChatReachesGemini(t *testing.T) {
 			queries := db.New(nil)
 			provider := gemini.NewProvider(client, "chat-test", "embedding-test")
 			aiRepository := aipostgres.NewRepository(queries)
-			module, err := NewModule(queries, appLogger, nil, gemini.NewTransactionLLM(client, "chat-test"), ai.NewAIService(provider, aiRepository, aiRepository), categories)
+			receiptStorage, err := storage.NewLocal(t.TempDir())
+			require.NoError(t, err)
+			module, err := NewModule(queries, appLogger, nil, gemini.NewTransactionLLM(client, "chat-test"), ai.NewAIService(provider, aiRepository, aiRepository), categories, receiptStorage, time.Second)
 			require.NoError(t, err)
 			router := gin.New()
 			protected := router.Group("/api/v1", middleware.AuthMiddleware(moduleTokenValidator{owner: owner}))

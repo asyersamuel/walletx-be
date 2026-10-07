@@ -261,7 +261,7 @@ func emitProviderError(ctx context.Context, output chan<- ai.ChatEvent, err erro
 
 func (p *provider) ExtractTransaction(ctx context.Context, request ai.ProviderExtractionRequest) (ai.ExtractedTransaction, error) {
 	if err := p.ready(ctx, p.chatModel); err != nil {
-		return ai.ExtractedTransaction{}, err
+		return ai.ExtractedTransaction{}, providerFailure("prepare Gemini extraction", err, p.chatModel)
 	}
 	contents, config, allowed, err := extractionRequest(request)
 	if err != nil {
@@ -269,31 +269,38 @@ func (p *provider) ExtractTransaction(ctx context.Context, request ai.ProviderEx
 	}
 	response, err := p.client.Models.GenerateContent(ctx, p.chatModel, contents, config)
 	if err != nil {
-		return ai.ExtractedTransaction{}, providerFailure("extract transaction with Gemini", err)
+		return ai.ExtractedTransaction{}, providerFailure("extract transaction with Gemini", err, p.chatModel)
 	}
 	if err := ctx.Err(); err != nil {
 		return ai.ExtractedTransaction{}, err
 	}
 	if err := checkGenerationResponse(response); err != nil {
-		return ai.ExtractedTransaction{}, err
+		return ai.ExtractedTransaction{}, generationExtractionFailure(response, err, p.chatModel)
 	}
 	if len(response.Candidates) != 1 || response.Candidates[0].FinishReason != genai.FinishReasonStop || response.Candidates[0].Content == nil {
-		return ai.ExtractedTransaction{}, fmt.Errorf("Gemini extraction did not complete: %w", apperrors.ErrInternal)
+		return ai.ExtractedTransaction{}, generationExtractionFailure(response, fmt.Errorf("Gemini extraction did not complete: %w", apperrors.ErrInternal), p.chatModel)
 	}
 	var text strings.Builder
 	for _, part := range response.Candidates[0].Content.Parts {
 		if !supportedTextPart(part) {
-			return ai.ExtractedTransaction{}, fmt.Errorf("Gemini extraction returned unsupported content: %w", apperrors.ErrInternal)
+			return ai.ExtractedTransaction{}, providerFailure("read Gemini extraction", &extractionParseError{cause: apperrors.ErrInternal, reason: "extraction_unsupported_content"}, p.chatModel)
 		}
 		if part.Thought {
 			continue
 		}
 		if len(part.Text) > maxExtractionBytes-text.Len() {
-			return ai.ExtractedTransaction{}, fmt.Errorf("Gemini extraction exceeded the response limit: %w", apperrors.ErrInternal)
+			return ai.ExtractedTransaction{}, providerFailure("read Gemini extraction", &extractionParseError{cause: apperrors.ErrInternal, reason: "extraction_response_limit"}, p.chatModel)
 		}
 		text.WriteString(part.Text)
 	}
-	return decodeExtraction(text.String(), allowed)
+	result, err := decodeExtraction(text.String(), allowed)
+	if err != nil {
+		var diagnostic *operationError
+		if errors.As(err, &diagnostic) {
+			diagnostic.model = p.chatModel
+		}
+	}
+	return result, err
 }
 
 func extractionRequest(request ai.ProviderExtractionRequest) ([]*genai.Content, *genai.GenerateContentConfig, map[uuid.UUID]struct{}, error) {
@@ -367,7 +374,7 @@ func extractionRequest(request ai.ProviderExtractionRequest) ([]*genai.Content, 
 	}
 	part := &genai.Part{Text: request.Text}
 	if hasImage {
-		part = &genai.Part{InlineData: &genai.Blob{Data: bytes.Clone(request.Image), MIMEType: request.MIMEType}}
+		part = genai.NewPartFromBytes(bytes.Clone(request.Image), request.MIMEType)
 	}
 	config := &genai.GenerateContentConfig{
 		CandidateCount: 1, ResponseModalities: []string{"TEXT"},
@@ -379,7 +386,12 @@ func extractionRequest(request ai.ProviderExtractionRequest) ([]*genai.Content, 
 
 func decodeExtraction(text string, allowed map[uuid.UUID]struct{}) (ai.ExtractedTransaction, error) {
 	invalid := func(cause error) (ai.ExtractedTransaction, error) {
-		return ai.ExtractedTransaction{}, providerFailure("decode Gemini extraction", cause)
+		return ai.ExtractedTransaction{}, providerFailure("decode Gemini extraction", &extractionParseError{cause: cause, reason: extractionParseReason(cause)})
+	}
+	var err error
+	text, err = stripJSONMarkdown(text)
+	if err != nil {
+		return invalid(err)
 	}
 	decoder := json.NewDecoder(strings.NewReader(text))
 	start, err := decoder.Token()
@@ -461,8 +473,12 @@ func (p *provider) ready(ctx context.Context, model string) error {
 	return nil
 }
 
-func providerFailure(operation string, cause error) error {
-	return &operationError{operation: operation, cause: cause}
+func providerFailure(operation string, cause error, models ...string) error {
+	e := &operationError{operation: operation, cause: cause}
+	if len(models) > 0 {
+		e.model = models[0]
+	}
+	return e
 }
 
 // SDK error messages can include response content. Keep boundary log messages
@@ -470,29 +486,58 @@ func providerFailure(operation string, cause error) error {
 type operationError struct {
 	operation string
 	cause     error
+	model     string
 }
 
 func (e *operationError) Error() string {
-	return e.operation + ": " + apperrors.ErrInternal.Error()
+	fields := e.SafeLogFields()
+	message := e.operation
+	if model, ok := fields["provider_model"].(string); ok {
+		message += " (model " + model + ")"
+	}
+	if code, ok := fields["provider_http_code"].(int); ok {
+		message += fmt.Sprintf(": Gemini HTTP %d", code)
+	}
+	if status, ok := fields["provider_status"].(string); ok {
+		message += " " + status
+	}
+	if reason, ok := fields["provider_reason"].(string); ok {
+		message += ": " + reason
+	}
+	return message
 }
+
+// SafeLogError deliberately has no unwrap chain: some log adapters serialize
+// entire error causes, which can contain credentials or receipt data. The
+// returned operational summary retains diagnostic codes; the original error
+// chain remains available on operationError for errors.Is/errors.As.
+func (e *operationError) SafeLogError() error { return errors.New(e.Error()) }
 
 func (e *operationError) Unwrap() []error {
 	return []error{apperrors.ErrInternal, e.cause}
 }
 
-// SafeLogFields exposes diagnostic codes without logging SDK messages, URLs,
-// credentials, prompts, generated content, or arbitrary API error details.
+// SafeLogFields includes bounded, redacted SDK messages and selected ErrorInfo
+// details. Response bodies, headers and arbitrary detail metadata are excluded.
 func (e *operationError) SafeLogFields() map[string]interface{} {
 	fields := map[string]interface{}{
 		"dependency":         "gemini",
 		"provider_operation": e.operation,
 	}
-	var apiError genai.APIError
-	var apiErrorPtr *genai.APIError
-	if errors.As(e.cause, &apiError) || (errors.As(e.cause, &apiErrorPtr) && apiErrorPtr != nil) {
-		if apiErrorPtr != nil {
-			apiError = *apiErrorPtr
-		}
+	if safeGeminiModel(e.model) {
+		fields["provider_model"] = e.model
+	}
+	if nilSDKError(e.cause) {
+		fields["provider_reason"] = "sdk_error"
+		return fields
+	}
+	var parseError *extractionParseError
+	if errors.As(e.cause, &parseError) && parseError != nil {
+		fields["provider_reason"] = parseError.reason
+		return fields
+	}
+	if apiError, ok := sdkAPIError(e.cause); ok {
+		addAPIDiagnostics(fields, apiError)
 		fields["provider_http_code"] = apiError.Code
 		switch apiError.Status {
 		case "INVALID_ARGUMENT", "FAILED_PRECONDITION", "PERMISSION_DENIED", "UNAUTHENTICATED", "RESOURCE_EXHAUSTED", "NOT_FOUND", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED", "CANCELLED", "UNKNOWN":
@@ -501,6 +546,15 @@ func (e *operationError) SafeLogFields() map[string]interface{} {
 		switch apiError.Code {
 		case 400:
 			fields["provider_reason"] = "invalid_request"
+			message := strings.ToLower(apiError.Message)
+			switch {
+			case strings.Contains(message, "api key not valid"), strings.Contains(message, "invalid api key"):
+				fields["provider_reason"] = "invalid_api_key"
+			case strings.Contains(message, "response_schema"), strings.Contains(message, "response schema"):
+				fields["provider_reason"] = "invalid_response_schema"
+			case strings.Contains(message, "mime"):
+				fields["provider_reason"] = "invalid_mime_type"
+			}
 		case 401, 403:
 			fields["provider_reason"] = "authentication_or_permissions"
 		case 404:

@@ -35,3 +35,14 @@ func (m *mockTransactionService) UpdateTransaction(ctx context.Context, userID, 
 func (m *mockTransactionService) DeleteTransaction(ctx context.Context, userID, transactionID uuid.UUID) error {
 	return m.Called(ctx, userID, transactionID).Error(0)
 }
+
+func (m *mockTransactionService) CreatePendingTransaction(ctx context.Context, userID uuid.UUID, input domain.CreatePendingTransactionInput) (*domain.PendingTransaction, error) {
+	args := m.Called(ctx, userID, input)
+	result, _ := args.Get(0).(*domain.PendingTransaction)
+	return result, args.Error(1)
+}
+func (m *mockTransactionService) CompletePendingTransaction(ctx context.Context, userID, transactionID uuid.UUID, input domain.CompletePendingTransactionInput) (*domain.Transaction, error) {
+	args := m.Called(ctx, userID, transactionID, input)
+	result, _ := args.Get(0).(*domain.Transaction)
+	return result, args.Error(1)
+}

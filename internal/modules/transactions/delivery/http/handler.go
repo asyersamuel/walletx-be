@@ -31,7 +31,7 @@ func NewHandler(service domain.TransactionService, dependencies ...interface{}) 
 	return handler
 }
 
-const maxReceiptBytes int64 = 10 << 20
+const maxReceiptBytes int64 = domain.MaxReceiptBytes
 
 func (h *Handler) Create(c *gin.Context) {
 	userID, ok := request.ParseUserID(c)
@@ -146,11 +146,26 @@ func (h *Handler) Receipt(c *gin.Context) {
 		h.handleError(c, err)
 		return
 	}
-	status := http.StatusOK
-	if result.Transaction != nil {
-		status = http.StatusCreated
+	if result.TransactionID == uuid.Nil || strings.TrimSpace(result.ReceiptImageURL) == "" {
+		h.handleError(c, apperrors.ErrInternal)
+		return
 	}
-	response.SuccessWithStatus(c, status, agentResponseDTO(result), result.Text)
+	switch result.Status {
+	case domain.TransactionStatusSuccess:
+		if result.Transaction == nil || result.Transaction.ID != result.TransactionID || result.Transaction.UserID != userID {
+			h.handleError(c, apperrors.ErrInternal)
+			return
+		}
+		response.SuccessWithStatus(c, http.StatusCreated, receiptResponseFromDomain(result), "Transaction recorded.")
+	case domain.TransactionStatusPending:
+		if result.Transaction != nil {
+			h.handleError(c, apperrors.ErrInternal)
+			return
+		}
+		response.SuccessWithStatus(c, http.StatusAccepted, receiptResponseFromDomain(result), "Receipt saved; processing pending.")
+	default:
+		h.handleError(c, apperrors.ErrInternal)
+	}
 }
 
 func supportedReceiptContentType(contentType string) bool {

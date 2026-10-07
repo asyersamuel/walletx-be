@@ -140,6 +140,7 @@ func TestTransactionService_DeleteTransaction_DelegatesAndPropagatesNotFound(t *
 
 	t.Run("success", func(t *testing.T) {
 		repo := new(mockTransactionRepository)
+		repo.On("GetTransactionForDeletion", ctx, userID, transactionID).Return(&domain.Transaction{ID: transactionID, UserID: userID}, nil).Once()
 		repo.On("DeleteTransaction", ctx, userID, transactionID).Return(nil).Once()
 		embedding := new(mockEmbeddingService)
 
@@ -153,12 +154,13 @@ func TestTransactionService_DeleteTransaction_DelegatesAndPropagatesNotFound(t *
 
 	t.Run("not found", func(t *testing.T) {
 		repo := new(mockTransactionRepository)
-		repo.On("DeleteTransaction", ctx, userID, transactionID).Return(apperrors.ErrNotFound).Once()
+		repo.On("GetTransactionForDeletion", ctx, userID, transactionID).Return(nil, apperrors.ErrNotFound).Once()
 
 		err := NewTransactionService(repo).DeleteTransaction(ctx, userID, transactionID)
 
 		assert.ErrorIs(t, err, apperrors.ErrNotFound)
 		repo.AssertExpectations(t)
+		repo.AssertNotCalled(t, "DeleteTransaction", mock.Anything, mock.Anything, mock.Anything)
 	})
 }
 

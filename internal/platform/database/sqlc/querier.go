@@ -11,7 +11,14 @@ import (
 )
 
 type Querier interface {
+	// Lock the owned category for the duration of this statement, preserving the
+	// same category-deletion race protection as CreateTransaction. The status guard
+	// makes concurrent completion have only one winner and prevents overwrites.
+	CompletePendingTransaction(ctx context.Context, arg CompletePendingTransactionParams) (CompletePendingTransactionRow, error)
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
+	// The receipt reference is durable before AI processing. Extraction fields are
+	// explicitly NULL; no category lookup is needed until completion.
+	CreatePendingTransaction(ctx context.Context, arg CreatePendingTransactionParams) (CreatePendingTransactionRow, error)
 	// The guarded_category CTE enforces relational integrity inside the very same
 	// statement as the INSERT: the category must exist AND belong to the executing
 	// user. If the guard returns zero rows, the INSERT ... SELECT inserts nothing
@@ -35,6 +42,9 @@ type Querier interface {
 	// This never leaks whether the id exists. The embedding column is intentionally
 	// omitted; it is loaded by a later embedding iteration.
 	GetTransactionByID(ctx context.Context, arg GetTransactionByIDParams) (GetTransactionByIDRow, error)
+	// Internal owner-scoped lookup includes pending receipts so deletion can clean
+	// their storage objects even though main GET/list hides them.
+	GetTransactionForDeletion(ctx context.Context, arg GetTransactionForDeletionParams) (GetTransactionForDeletionRow, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByGoogleID(ctx context.Context, googleID string) (User, error)
 	GetUserByGoogleIDAny(ctx context.Context, googleID string) (User, error)
@@ -48,6 +58,7 @@ type Querier interface {
 	// Ordering is deterministic and stable: transaction_date desc, then id desc as
 	// a tie-breaker, so pagination never duplicates or skips rows across pages even
 	// when multiple transactions share the same transaction_date.
+	// Only successful transactions are visible, including before pagination.
 	ListTransactions(ctx context.Context, arg ListTransactionsParams) ([]ListTransactionsRow, error)
 	// Explicit casts let sqlc type the table-valued RPC's projection.
 	MatchTransactions(ctx context.Context, arg MatchTransactionsParams) ([]MatchTransactionsRow, error)
@@ -90,11 +101,8 @@ type Querier interface {
 	// So callers send only the fields they want to change (a "full update" simply
 	// sets every flag). The flags are derived in the repository from which domain
 	// fields are non-nil, so this is a true partial update.
-	// Why CASE + flags instead of coalesce(narg, col): amount is numeric, and sqlc
-	// maps a *nullable* numeric parameter to pgtype.Numeric, which pgx cannot
-	// encode from a bare float64 (its encoder requires the *big.Int field). Using a
-	// NON-nullable float64 value guarded by a boolean flag keeps amount a plain
-	// float64 (identical to CreateTransaction) and avoids pgtype.Numeric entirely.
+	// CASE + flags distinguishes omitted fields from explicitly cleared optional
+	// fields. Nullable numeric parameters are encoded as pgtype.Numeric.
 	// Security / isolation:
 	//   * WHERE id = $id AND user_id = $user -> a transaction owned by another user
 	//     (or a missing one) matches zero rows => ErrNoRows => ErrNotFound.

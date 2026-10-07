@@ -39,6 +39,9 @@ func SetupRouter(modules *Modules, cfg *configs.Config, validator middleware.Tok
 			users.RegisterProtectedRoutes(protected, modules.Users.Handler)
 			categories.RegisterProtectedRoutes(protected, modules.Categories.Handler)
 			transactionhttp.RegisterProtectedRoutes(protected, modules.Transactions.Handler)
+			if cfg.App.DevMode && modules.ReceiptStorage != nil {
+				registerStorageTestRoutes(protected, modules.ReceiptStorage, appLogger)
+			}
 			aihttp.RegisterRoutes(protected, modules.AI)
 		}
 	}

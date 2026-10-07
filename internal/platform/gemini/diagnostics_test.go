@@ -20,12 +20,12 @@ func TestOperationErrorSafeLogFields(t *testing.T) {
 		status string
 		reason string
 	}{
-		{"restricted model", genai.APIError{Code: 404, Status: "NOT_FOUND", Message: "This model is no longer available to new users. " + private}, 404, "NOT_FOUND", "model_access_restricted"},
-		{"pointer SDK error", &genai.APIError{Code: 429, Status: "RESOURCE_EXHAUSTED", Message: private, Details: []map[string]any{{"private": private}}}, 429, "RESOURCE_EXHAUSTED", "quota_or_rate_limit"},
-		{"wrapped SDK error", fmt.Errorf("%w", genai.APIError{Code: 403, Status: "PERMISSION_DENIED", Message: private}), 403, "PERMISSION_DENIED", "authentication_or_permissions"},
-		{"invalid request", genai.APIError{Code: 400, Status: "INVALID_ARGUMENT", Message: private}, 400, "INVALID_ARGUMENT", "invalid_request"},
-		{"provider unavailable", genai.APIError{Code: 503, Status: "UNAVAILABLE", Message: private}, 503, "UNAVAILABLE", "provider_unavailable"},
-		{"untrusted status", genai.APIError{Code: 404, Status: private, Message: private}, 404, "", "model_or_endpoint_not_found"},
+		{"restricted model", genai.APIError{Code: 404, Status: "NOT_FOUND", Message: "This model is no longer available to new users. api_key=" + private}, 404, "NOT_FOUND", "model_access_restricted"},
+		{"pointer SDK error", &genai.APIError{Code: 429, Status: "RESOURCE_EXHAUSTED", Message: "api_key=" + private, Details: []map[string]any{{"private": private}}}, 429, "RESOURCE_EXHAUSTED", "quota_or_rate_limit"},
+		{"wrapped SDK error", fmt.Errorf("%w", genai.APIError{Code: 403, Status: "PERMISSION_DENIED", Message: "api_key=" + private}), 403, "PERMISSION_DENIED", "authentication_or_permissions"},
+		{"invalid request", genai.APIError{Code: 400, Status: "INVALID_ARGUMENT", Message: "api_key=" + private}, 400, "INVALID_ARGUMENT", "invalid_request"},
+		{"provider unavailable", genai.APIError{Code: 503, Status: "UNAVAILABLE", Message: "api_key=" + private}, 503, "UNAVAILABLE", "provider_unavailable"},
+		{"untrusted status", genai.APIError{Code: 404, Status: private, Message: "api_key=" + private}, 404, "", "model_or_endpoint_not_found"},
 		{"timeout", context.DeadlineExceeded, 0, "", "timeout"},
 		{"cancellation", context.Canceled, 0, "", "cancelled"},
 		{"network error", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New(private)}, 0, "", "network_error"},

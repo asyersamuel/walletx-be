@@ -517,35 +517,27 @@ func TestTransactionSchemaConstraints(t *testing.T) {
 		assert.Equal(t, wantCode, pgErr.Code, "unexpected SQLSTATE for query")
 	}
 
-	t.Run("merchant_name NOT NULL enforced", func(t *testing.T) {
-		assertPgCode(t, "23502",
-			`INSERT INTO public.transactions (user_id, category_id, merchant_name, amount, transaction_date)
-			 VALUES ($1, $2, NULL, $3, $4)`,
-			userID, categoryID, 100.0, time.Now(),
-		)
+	t.Run("extraction fields may be NULL", func(t *testing.T) {
+		var allNull bool
+		err := testPool.QueryRow(ctx,
+			`INSERT INTO public.transactions (user_id, status, receipt_image_url)
+			 VALUES ($1, 'pending', 'https://storage.example/receipt')
+			 RETURNING merchant_name IS NULL AND amount IS NULL AND category_id IS NULL AND transaction_date IS NULL`,
+			userID,
+		).Scan(&allNull)
+		require.NoError(t, err)
+		require.True(t, allNull)
+	})
+
+	t.Run("status is required with no default", func(t *testing.T) {
+		assertPgCode(t, "23502", `INSERT INTO public.transactions (user_id) VALUES ($1)`, userID)
 		assert.True(t, database.IsNotNullViolation(errorWithCode("23502")))
-	})
-
-	t.Run("transaction_date NOT NULL enforced", func(t *testing.T) {
-		assertPgCode(t, "23502",
-			`INSERT INTO public.transactions (user_id, category_id, merchant_name, amount, transaction_date)
-			 VALUES ($1, $2, $3, $4, NULL)`,
-			userID, categoryID, "No Date", 100.0,
-		)
-	})
-
-	t.Run("amount NOT NULL enforced", func(t *testing.T) {
-		assertPgCode(t, "23502",
-			`INSERT INTO public.transactions (user_id, category_id, merchant_name, amount, transaction_date)
-			 VALUES ($1, $2, $3, NULL, $4)`,
-			userID, categoryID, "No Amount", time.Now(),
-		)
 	})
 
 	t.Run("amount CHECK (> 0) enforced", func(t *testing.T) {
 		assertPgCode(t, "23514",
-			`INSERT INTO public.transactions (user_id, category_id, merchant_name, amount, transaction_date)
-			 VALUES ($1, $2, $3, $4, $5)`,
+			`INSERT INTO public.transactions (status, user_id, category_id, merchant_name, amount, transaction_date)
+			 VALUES ('success', $1, $2, $3, $4, $5)`,
 			userID, categoryID, "Zero", 0.0, time.Now(),
 		)
 		assert.True(t, database.IsCheckViolation(errorWithCode("23514")))
@@ -553,8 +545,8 @@ func TestTransactionSchemaConstraints(t *testing.T) {
 
 	t.Run("category_id foreign key enforced", func(t *testing.T) {
 		assertPgCode(t, "23503",
-			`INSERT INTO public.transactions (user_id, category_id, merchant_name, amount, transaction_date)
-			 VALUES ($1, $2, $3, $4, $5)`,
+			`INSERT INTO public.transactions (status, user_id, category_id, merchant_name, amount, transaction_date)
+			 VALUES ('success', $1, $2, $3, $4, $5)`,
 			userID, uuid.New(), "No Category", 100.0, time.Now(),
 		)
 		assert.True(t, database.IsForeignKeyViolation(errorWithCode("23503")))
@@ -562,8 +554,8 @@ func TestTransactionSchemaConstraints(t *testing.T) {
 
 	t.Run("user_id foreign key enforced", func(t *testing.T) {
 		assertPgCode(t, "23503",
-			`INSERT INTO public.transactions (user_id, category_id, merchant_name, amount, transaction_date)
-			 VALUES ($1, $2, $3, $4, $5)`,
+			`INSERT INTO public.transactions (status, user_id, category_id, merchant_name, amount, transaction_date)
+			 VALUES ('success', $1, $2, $3, $4, $5)`,
 			uuid.New(), categoryID, "No User", 100.0, time.Now(),
 		)
 	})
@@ -572,8 +564,8 @@ func TestTransactionSchemaConstraints(t *testing.T) {
 		// A 3-dim vector must be rejected by the vector(768) column.
 		wrong := "[1,2,3]"
 		_, err := testPool.Exec(ctx,
-			`INSERT INTO public.transactions (user_id, category_id, merchant_name, amount, transaction_date, embedding)
-			 VALUES ($1, $2, $3, $4, $5, $6::extensions.vector)`,
+			`INSERT INTO public.transactions (status, user_id, category_id, merchant_name, amount, transaction_date, embedding)
+			 VALUES ('success', $1, $2, $3, $4, $5, $6::extensions.vector)`,
 			userID, categoryID, "Bad Vector", 100.0, time.Now(), wrong,
 		)
 		require.Error(t, err, "wrong-dimension embedding must be rejected")
@@ -581,8 +573,8 @@ func TestTransactionSchemaConstraints(t *testing.T) {
 		// A correctly sized 768-dim zero vector must be accepted.
 		right := "[" + strings.TrimSuffix(strings.Repeat("0,", 768), ",") + "]"
 		_, err = testPool.Exec(ctx,
-			`INSERT INTO public.transactions (user_id, category_id, merchant_name, amount, transaction_date, embedding)
-			 VALUES ($1, $2, $3, $4, $5, $6::extensions.vector)`,
+			`INSERT INTO public.transactions (status, user_id, category_id, merchant_name, amount, transaction_date, embedding)
+			 VALUES ('success', $1, $2, $3, $4, $5, $6::extensions.vector)`,
 			userID, categoryID, "Good Vector", 100.0, time.Now(), right,
 		)
 		require.NoError(t, err, "768-dim embedding must be accepted")

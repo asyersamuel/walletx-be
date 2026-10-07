@@ -40,9 +40,9 @@ func (m *mockAgentService) Handle(ctx context.Context, userID uuid.UUID, prompt 
 
 type mockReceiptService struct{ mock.Mock }
 
-func (m *mockReceiptService) ProcessReceipt(ctx context.Context, userID uuid.UUID, contentType, filename string, image []byte) (domain.AgentResponse, error) {
+func (m *mockReceiptService) ProcessReceipt(ctx context.Context, userID uuid.UUID, contentType, filename string, image []byte) (domain.ReceiptResult, error) {
 	args := m.Called(ctx, userID, contentType, filename, image)
-	result, _ := args.Get(0).(domain.AgentResponse)
+	result, _ := args.Get(0).(domain.ReceiptResult)
 	return result, args.Error(1)
 }
 
@@ -499,7 +499,7 @@ func TestTransactionHandler_Receipt_ValidImageReturnsCreated(t *testing.T) {
 	userID := uuid.New()
 	agent := new(mockReceiptService)
 	transaction := &domain.Transaction{ID: uuid.New(), UserID: userID, MerchantName: "Cafe", Amount: 10, TransactionDate: time.Now()}
-	agent.On("ProcessReceipt", mock.Anything, userID, "image/png", "receipt.png", mock.Anything).Return(domain.AgentResponse{Text: "Receipt recorded.", Transaction: transaction}, nil).Once()
+	agent.On("ProcessReceipt", mock.Anything, userID, "image/png", "receipt.png", mock.Anything).Return(domain.ReceiptResult{Status: domain.TransactionStatusSuccess, TransactionID: transaction.ID, ReceiptImageURL: "receipt://" + userID.String() + "/receipt.png", Transaction: transaction}, nil).Once()
 	router := setupTransactionRouter(new(mockTransactionService), true, userID, agent)
 
 	body := &bytes.Buffer{}
@@ -590,4 +590,72 @@ func TestTransactionHandler_Receipt_UnauthenticatedReturns401(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 	receipt.AssertNotCalled(t, "ProcessReceipt", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func (m *mockTransactionService) CreatePendingTransaction(ctx context.Context, userID uuid.UUID, input domain.CreatePendingTransactionInput) (*domain.PendingTransaction, error) {
+	args := m.Called(ctx, userID, input)
+	result, _ := args.Get(0).(*domain.PendingTransaction)
+	return result, args.Error(1)
+}
+func (m *mockTransactionService) CompletePendingTransaction(ctx context.Context, userID, transactionID uuid.UUID, input domain.CompletePendingTransactionInput) (*domain.Transaction, error) {
+	args := m.Called(ctx, userID, transactionID, input)
+	result, _ := args.Get(0).(*domain.Transaction)
+	return result, args.Error(1)
+}
+
+func TestTransactionHandler_ReceiptStatusAndSafeErrors(t *testing.T) {
+	user, id := uuid.New(), uuid.New()
+	reference := "receipt://" + user.String() + "/" + uuid.NewString() + ".png"
+	for _, tc := range []struct {
+		name   string
+		result domain.ReceiptResult
+		err    error
+		want   int
+	}{
+		{name: "pending accepted", result: domain.ReceiptResult{Status: domain.TransactionStatusPending, TransactionID: id, ReceiptImageURL: reference}, want: http.StatusAccepted},
+		{name: "provider error hidden", err: errors.New("provider token=private"), want: http.StatusInternalServerError},
+		{name: "invalid input classification", err: apperrors.ErrInvalidInput, want: http.StatusBadRequest},
+		{name: "not found classification", err: apperrors.ErrNotFound, want: http.StatusNotFound},
+		{name: "unknown result status", result: domain.ReceiptResult{TransactionID: id, ReceiptImageURL: reference}, want: http.StatusInternalServerError},
+		{name: "success without completed transaction", result: domain.ReceiptResult{Status: domain.TransactionStatusSuccess, TransactionID: id, ReceiptImageURL: reference}, want: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			receipts := new(mockReceiptService)
+			receipts.On("ProcessReceipt", mock.Anything, user, "image/png", "receipt.png", mock.Anything).Return(tc.result, tc.err).Once()
+			router := setupTransactionRouter(new(mockTransactionService), true, user, receipts)
+			body := &bytes.Buffer{}
+			writer := multipart.NewWriter(body)
+			part, err := writer.CreateFormFile("receipt", "receipt.png")
+			require.NoError(t, err)
+			_, err = part.Write([]byte("\x89PNG\r\n\x1a\n"))
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+			req := httptest.NewRequest(http.MethodPost, "/transactions/receipt", body)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, req)
+			require.Equal(t, tc.want, recorder.Code)
+			require.NotContains(t, recorder.Body.String(), "private")
+			if tc.want == http.StatusAccepted {
+				var response struct {
+					Message string `json:"message"`
+					Data    struct {
+						Status      string               `json:"status"`
+						ID          uuid.UUID            `json:"transaction_id"`
+						Reference   string               `json:"receipt_image_url"`
+						Transaction *transactionResponse `json:"transaction"`
+					} `json:"data"`
+				}
+				require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+				require.Equal(t, "pending", response.Data.Status)
+				require.Equal(t, id, response.Data.ID)
+				require.Equal(t, reference, response.Data.Reference)
+				require.Nil(t, response.Data.Transaction)
+				require.Contains(t, response.Message, "saved")
+				require.NotContains(t, recorder.Body.String(), "merchant_name")
+				require.NotContains(t, recorder.Body.String(), "amount")
+			}
+			receipts.AssertExpectations(t)
+		})
+	}
 }

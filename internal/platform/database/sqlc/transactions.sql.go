@@ -11,17 +11,138 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const completePendingTransaction = `-- name: CompletePendingTransaction :one
+with guarded_category as (
+    select c.id
+    from public.categories c
+    where c.id = $7
+      and c.user_id = $6
+    for share
+)
+update public.transactions as t
+set category_id = guarded_category.id,
+    merchant_name = $1,
+    amount = $2,
+    transaction_date = $3,
+    notes = $4,
+    status = 'success',
+    updated_at = now()
+from guarded_category
+where t.id = $5
+  and t.user_id = $6
+  and t.status = 'pending'
+returning t.id, t.user_id, t.category_id, t.merchant_name, t.amount,
+    t.transaction_date, t.receipt_image_url, t.notes,
+    t.created_at, t.updated_at, t.status
+`
+
+type CompletePendingTransactionParams struct {
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
+	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
+	Notes           *string            `json:"notes"`
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	CategoryID      pgtype.UUID        `json:"category_id"`
+}
+
+type CompletePendingTransactionRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	CategoryID      pgtype.UUID        `json:"category_id"`
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
+	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
+	ReceiptImageUrl *string            `json:"receipt_image_url"`
+	Notes           *string            `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Status          string             `json:"status"`
+}
+
+// Lock the owned category for the duration of this statement, preserving the
+// same category-deletion race protection as CreateTransaction. The status guard
+// makes concurrent completion have only one winner and prevents overwrites.
+func (q *Queries) CompletePendingTransaction(ctx context.Context, arg CompletePendingTransactionParams) (CompletePendingTransactionRow, error) {
+	row := q.db.QueryRow(ctx, completePendingTransaction,
+		arg.MerchantName,
+		arg.Amount,
+		arg.TransactionDate,
+		arg.Notes,
+		arg.ID,
+		arg.UserID,
+		arg.CategoryID,
+	)
+	var i CompletePendingTransactionRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CategoryID,
+		&i.MerchantName,
+		&i.Amount,
+		&i.TransactionDate,
+		&i.ReceiptImageUrl,
+		&i.Notes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Status,
+	)
+	return i, err
+}
+
+const createPendingTransaction = `-- name: CreatePendingTransaction :one
+insert into public.transactions (
+    user_id, receipt_image_url, status,
+    amount, merchant_name, category_id, transaction_date
+)
+values (
+    $1, $2, 'pending',
+    NULL, NULL, NULL, NULL
+)
+returning id, user_id, receipt_image_url, created_at, updated_at, status
+`
+
+type CreatePendingTransactionParams struct {
+	UserID          pgtype.UUID `json:"user_id"`
+	ReceiptImageUrl *string     `json:"receipt_image_url"`
+}
+
+type CreatePendingTransactionRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	ReceiptImageUrl *string            `json:"receipt_image_url"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Status          string             `json:"status"`
+}
+
+// The receipt reference is durable before AI processing. Extraction fields are
+// explicitly NULL; no category lookup is needed until completion.
+func (q *Queries) CreatePendingTransaction(ctx context.Context, arg CreatePendingTransactionParams) (CreatePendingTransactionRow, error) {
+	row := q.db.QueryRow(ctx, createPendingTransaction, arg.UserID, arg.ReceiptImageUrl)
+	var i CreatePendingTransactionRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ReceiptImageUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Status,
+	)
+	return i, err
+}
+
 const createTransaction = `-- name: CreateTransaction :one
 with guarded_category as (
-    select id
-    from public.categories
-    where id = $2
-      and user_id = $1
+    select c.id
+    from public.categories c
+    where c.id = $2
+      and c.user_id = $1
     for share
 )
 insert into public.transactions (
     user_id, category_id, merchant_name, amount,
-    transaction_date, receipt_image_url, notes
+    transaction_date, receipt_image_url, notes, status
 )
 select
     $1,
@@ -30,18 +151,19 @@ select
     $4,
     $5,
     $6,
-    $7
+    $7,
+    'success'
 from guarded_category
 returning id, user_id, category_id, merchant_name, amount,
     transaction_date, receipt_image_url, notes,
-    created_at, updated_at
+    created_at, updated_at, status
 `
 
 type CreateTransactionParams struct {
 	UserID          pgtype.UUID        `json:"user_id"`
 	CategoryID      pgtype.UUID        `json:"category_id"`
-	MerchantName    string             `json:"merchant_name"`
-	Amount          float64            `json:"amount"`
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
 	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
 	ReceiptImageUrl *string            `json:"receipt_image_url"`
 	Notes           *string            `json:"notes"`
@@ -51,13 +173,14 @@ type CreateTransactionRow struct {
 	ID              pgtype.UUID        `json:"id"`
 	UserID          pgtype.UUID        `json:"user_id"`
 	CategoryID      pgtype.UUID        `json:"category_id"`
-	MerchantName    string             `json:"merchant_name"`
-	Amount          float64            `json:"amount"`
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
 	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
 	ReceiptImageUrl *string            `json:"receipt_image_url"`
 	Notes           *string            `json:"notes"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Status          string             `json:"status"`
 }
 
 // The guarded_category CTE enforces relational integrity inside the very same
@@ -91,6 +214,7 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		&i.Notes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Status,
 	)
 	return i, err
 }
@@ -120,10 +244,11 @@ func (q *Queries) DeleteTransaction(ctx context.Context, arg DeleteTransactionPa
 
 const getTransactionByID = `-- name: GetTransactionByID :one
 select id, user_id, category_id, merchant_name, amount, transaction_date,
-    receipt_image_url, notes, created_at, updated_at
+    receipt_image_url, notes, created_at, updated_at, status
 from public.transactions
 where id = $1
   and user_id = $2
+  and status = 'success'
 limit 1
 `
 
@@ -136,13 +261,14 @@ type GetTransactionByIDRow struct {
 	ID              pgtype.UUID        `json:"id"`
 	UserID          pgtype.UUID        `json:"user_id"`
 	CategoryID      pgtype.UUID        `json:"category_id"`
-	MerchantName    string             `json:"merchant_name"`
-	Amount          float64            `json:"amount"`
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
 	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
 	ReceiptImageUrl *string            `json:"receipt_image_url"`
 	Notes           *string            `json:"notes"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Status          string             `json:"status"`
 }
 
 // Ownership isolation is enforced in the WHERE clause: the user_id predicate
@@ -164,15 +290,66 @@ func (q *Queries) GetTransactionByID(ctx context.Context, arg GetTransactionByID
 		&i.Notes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Status,
+	)
+	return i, err
+}
+
+const getTransactionForDeletion = `-- name: GetTransactionForDeletion :one
+select id, user_id, category_id, merchant_name, amount, transaction_date,
+    receipt_image_url, notes, created_at, updated_at, status
+from public.transactions
+where id = $1
+  and user_id = $2
+limit 1
+`
+
+type GetTransactionForDeletionParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+type GetTransactionForDeletionRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	CategoryID      pgtype.UUID        `json:"category_id"`
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
+	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
+	ReceiptImageUrl *string            `json:"receipt_image_url"`
+	Notes           *string            `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Status          string             `json:"status"`
+}
+
+// Internal owner-scoped lookup includes pending receipts so deletion can clean
+// their storage objects even though main GET/list hides them.
+func (q *Queries) GetTransactionForDeletion(ctx context.Context, arg GetTransactionForDeletionParams) (GetTransactionForDeletionRow, error) {
+	row := q.db.QueryRow(ctx, getTransactionForDeletion, arg.ID, arg.UserID)
+	var i GetTransactionForDeletionRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CategoryID,
+		&i.MerchantName,
+		&i.Amount,
+		&i.TransactionDate,
+		&i.ReceiptImageUrl,
+		&i.Notes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Status,
 	)
 	return i, err
 }
 
 const listTransactions = `-- name: ListTransactions :many
 select id, user_id, category_id, merchant_name, amount, transaction_date,
-    receipt_image_url, notes, created_at, updated_at
+    receipt_image_url, notes, created_at, updated_at, status
 from public.transactions
 where user_id = $1
+  and status = 'success'
   and (
       $2::timestamptz is null
       or transaction_date >= $2::timestamptz
@@ -198,13 +375,14 @@ type ListTransactionsRow struct {
 	ID              pgtype.UUID        `json:"id"`
 	UserID          pgtype.UUID        `json:"user_id"`
 	CategoryID      pgtype.UUID        `json:"category_id"`
-	MerchantName    string             `json:"merchant_name"`
-	Amount          float64            `json:"amount"`
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
 	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
 	ReceiptImageUrl *string            `json:"receipt_image_url"`
 	Notes           *string            `json:"notes"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Status          string             `json:"status"`
 }
 
 // Scope strictly to the caller. The user_id predicate lives in WHERE, so it is
@@ -215,6 +393,7 @@ type ListTransactionsRow struct {
 // Ordering is deterministic and stable: transaction_date desc, then id desc as
 // a tie-breaker, so pagination never duplicates or skips rows across pages even
 // when multiple transactions share the same transaction_date.
+// Only successful transactions are visible, including before pagination.
 func (q *Queries) ListTransactions(ctx context.Context, arg ListTransactionsParams) ([]ListTransactionsRow, error) {
 	rows, err := q.db.Query(ctx, listTransactions,
 		arg.UserID,
@@ -241,6 +420,7 @@ func (q *Queries) ListTransactions(ctx context.Context, arg ListTransactionsPara
 			&i.Notes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Status,
 		); err != nil {
 			return nil, err
 		}
@@ -258,6 +438,7 @@ set embedding   = $1::text::extensions.vector,
     updated_at  = now()
 where public.transactions.id      = $2
   and public.transactions.user_id = $3
+  and public.transactions.status = 'success'
   and public.transactions.updated_at = $4
 `
 
@@ -301,6 +482,7 @@ select
     t.amount,
     t.transaction_date,
     t.notes,
+    t.status,
     c.name                                               as category_name,
     c.type                                               as category_type,
     (1.0 - (t.embedding <=> $1::text::extensions.vector))::float8 as similarity
@@ -309,6 +491,7 @@ left join public.categories c
     on c.id = t.category_id
    and c.user_id = t.user_id
 where t.user_id   = $2
+  and t.status = 'success'
   and t.embedding is not null
   and (1.0 - (t.embedding <=> $1::text::extensions.vector))::float8
           >= $3::float8
@@ -337,10 +520,11 @@ type SearchSimilarTransactionsRow struct {
 	ID              pgtype.UUID        `json:"id"`
 	UserID          pgtype.UUID        `json:"user_id"`
 	CategoryID      pgtype.UUID        `json:"category_id"`
-	MerchantName    string             `json:"merchant_name"`
-	Amount          float64            `json:"amount"`
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
 	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
 	Notes           *string            `json:"notes"`
+	Status          string             `json:"status"`
 	CategoryName    *string            `json:"category_name"`
 	CategoryType    *string            `json:"category_type"`
 	Similarity      float64            `json:"similarity"`
@@ -387,6 +571,7 @@ func (q *Queries) SearchSimilarTransactions(ctx context.Context, arg SearchSimil
 			&i.Amount,
 			&i.TransactionDate,
 			&i.Notes,
+			&i.Status,
 			&i.CategoryName,
 			&i.CategoryType,
 			&i.Similarity,
@@ -412,6 +597,7 @@ set merchant_name     = case when $1::boolean then $2 else merchant_name end,
     updated_at        = now()
 where public.transactions.id = $13
   and public.transactions.user_id = $14
+  and public.transactions.status = 'success'
   and (
       $7::boolean = false
       or exists (
@@ -423,14 +609,14 @@ where public.transactions.id = $13
   )
 returning id, user_id, category_id, merchant_name, amount,
     transaction_date, receipt_image_url, notes,
-    created_at, updated_at
+    created_at, updated_at, status
 `
 
 type UpdateTransactionParams struct {
 	SetMerchantName    bool               `json:"set_merchant_name"`
-	MerchantName       string             `json:"merchant_name"`
+	MerchantName       *string            `json:"merchant_name"`
 	SetAmount          bool               `json:"set_amount"`
-	Amount             float64            `json:"amount"`
+	Amount             pgtype.Numeric     `json:"amount"`
 	SetTransactionDate bool               `json:"set_transaction_date"`
 	TransactionDate    pgtype.Timestamptz `json:"transaction_date"`
 	SetCategoryID      bool               `json:"set_category_id"`
@@ -447,13 +633,14 @@ type UpdateTransactionRow struct {
 	ID              pgtype.UUID        `json:"id"`
 	UserID          pgtype.UUID        `json:"user_id"`
 	CategoryID      pgtype.UUID        `json:"category_id"`
-	MerchantName    string             `json:"merchant_name"`
-	Amount          float64            `json:"amount"`
+	MerchantName    *string            `json:"merchant_name"`
+	Amount          pgtype.Numeric     `json:"amount"`
 	TransactionDate pgtype.Timestamptz `json:"transaction_date"`
 	ReceiptImageUrl *string            `json:"receipt_image_url"`
 	Notes           *string            `json:"notes"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Status          string             `json:"status"`
 }
 
 // Partial, ownership-safe update. Each mutable column is written only when its
@@ -464,11 +651,8 @@ type UpdateTransactionRow struct {
 // So callers send only the fields they want to change (a "full update" simply
 // sets every flag). The flags are derived in the repository from which domain
 // fields are non-nil, so this is a true partial update.
-// Why CASE + flags instead of coalesce(narg, col): amount is numeric, and sqlc
-// maps a *nullable* numeric parameter to pgtype.Numeric, which pgx cannot
-// encode from a bare float64 (its encoder requires the *big.Int field). Using a
-// NON-nullable float64 value guarded by a boolean flag keeps amount a plain
-// float64 (identical to CreateTransaction) and avoids pgtype.Numeric entirely.
+// CASE + flags distinguishes omitted fields from explicitly cleared optional
+// fields. Nullable numeric parameters are encoded as pgtype.Numeric.
 // Security / isolation:
 //   - WHERE id = $id AND user_id = $user -> a transaction owned by another user
 //     (or a missing one) matches zero rows => ErrNoRows => ErrNotFound.
@@ -510,6 +694,7 @@ func (q *Queries) UpdateTransaction(ctx context.Context, arg UpdateTransactionPa
 		&i.Notes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Status,
 	)
 	return i, err
 }
