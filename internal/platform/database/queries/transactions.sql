@@ -33,6 +33,13 @@ returning id, user_id, category_id, merchant_name, amount,
     transaction_date, receipt_image_url, notes,
     created_at, updated_at, status;
 
+-- name: GetPendingTransactions :many
+select id, user_id, receipt_image_url, created_at, updated_at, status
+from public.transactions
+where status = 'pending'
+order by created_at asc, id asc
+limit sqlc.arg(batch_limit)::int;
+
 -- name: CreatePendingTransaction :one
 -- The receipt reference is durable before AI processing. Extraction fields are
 -- explicitly NULL; no category lookup is needed until completion.

@@ -61,6 +61,8 @@ func TestSDKDiagnosticsCapturePermissionDetailsFromHTTP(t *testing.T) {
 	require.ErrorAs(t, err, &diagnostic)
 	fields := diagnostic.SafeLogFields()
 	require.Equal(t, "Permission denied: Consumer invalid", fields["provider_exact_message"])
+	require.Equal(t, diagnostic.cause.Error(), diagnostic.ProviderRawErrorDetail)
+	require.Contains(t, fields["provider_raw_error_detail"], "Permission denied: Consumer invalid")
 	require.Equal(t, "CONSUMER_INVALID", fields["provider_error_reason"])
 	require.Equal(t, "PERMISSION_DENIED", fields["provider_status"])
 	details := fields["provider_details"].([]map[string]interface{})

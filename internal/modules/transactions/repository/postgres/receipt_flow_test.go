@@ -246,7 +246,7 @@ func TestReceiptFlow_GetAndDeletePendingAndSuccessWithStorageCleanup(t *testing.
 			owner, other := seedUser(t), seedUser(t)
 			store, err := storage.NewLocal(t.TempDir())
 			require.NoError(t, err)
-			reference, err := store.SaveReceipt(ctx, owner, "image/png", "receipt.png", []byte{1})
+			reference, err := store.SaveReceipt(ctx, owner, "image/png", "receipt.png", []byte("\x89PNG\r\n\x1a\n"))
 			require.NoError(t, err)
 			repo := newTestRepository(t)
 			pending, err := repo.CreatePendingTransaction(ctx, domain.CreatePendingTransactionInput{UserID: owner, ReceiptImageURL: reference})

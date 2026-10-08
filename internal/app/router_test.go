@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -23,6 +24,61 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHealthAndCronRoutesAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	modules := &Modules{
+		Auth: &auth.Module{Handler: &auth.Handler{}}, Users: &users.Module{Handler: &users.Handler{}},
+		Categories: &categories.Module{Handler: &categories.Handler{}}, Transactions: &transactions.Module{Handler: &transactionhttp.Handler{}},
+		AI: aihttp.NewHandler(routerAIService{}, routerLogger{}),
+	}
+	calls := 0
+	modules.Transactions.CronHandler = transactionhttp.NewCronHandler(routerPendingProcessor{run: func(ctx context.Context) (transactions.PendingReceiptSummary, error) {
+		calls++
+		return transactions.PendingReceiptSummary{Fetched: 2, Failed: 1, Succeeded: 1}, nil
+	}})
+	// A nil validator would panic if a cron Bearer token reached JWT middleware.
+	cfg := &configs.Config{Cron: configs.CronConfig{Secret: "cron-secret"}}
+	cfg.App.DevMode = true
+	r := SetupRouter(modules, cfg, nil, routerLogger{})
+	// Probe the same registration helper until a real cron use case is added.
+	cron := RegisterCronRoutes(r.Group("/api/v1"), cfg.Cron.Secret)
+	cron.GET("/probe", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	for _, tc := range []struct {
+		path, token string
+		status      int
+	}{
+		{HealthPath, "", http.StatusOK},
+		{HealthPath, "invalid", http.StatusOK},
+		{"/api/v1/cron/probe", "", http.StatusUnauthorized},
+		{"/api/v1/cron/probe", "Bearer invalid", http.StatusUnauthorized},
+		{"/api/v1/cron/probe", "Bearer cron-secret", http.StatusNoContent},
+		{"/api/v1/cron/process-pending-receipts", "", http.StatusUnauthorized},
+		{"/api/v1/cron/process-pending-receipts", "Bearer invalid", http.StatusUnauthorized},
+		{"/api/v1/cron/process-pending-receipts", "Bearer cron-secret", http.StatusOK},
+		{"/api/v1/ai/chat", "", http.StatusUnauthorized},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		if tc.path == "/api/v1/ai/chat" {
+			req.Method = http.MethodPost
+		}
+		if tc.token != "" {
+			req.Header.Set("Authorization", tc.token)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, tc.status, w.Code, tc.path)
+	}
+	require.Equal(t, 1, calls)
+}
+
+type routerPendingProcessor struct {
+	run func(context.Context) (transactions.PendingReceiptSummary, error)
+}
+
+func (p routerPendingProcessor) ProcessPendingReceipts(ctx context.Context) (transactions.PendingReceiptSummary, error) {
+	return p.run(ctx)
+}
 
 type routerLogger struct{}
 

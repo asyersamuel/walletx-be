@@ -26,6 +26,12 @@ func SetupRouter(modules *Modules, cfg *configs.Config, validator middleware.Tok
 
 	api := r.Group("/api/v1")
 	{
+		api.GET("/health", Health)
+		cron := RegisterCronRoutes(api, cfg.Cron.Secret)
+		if modules.Transactions.CronHandler != nil {
+			transactionhttp.RegisterCronRoutes(cron, modules.Transactions.CronHandler)
+		}
+
 		api.GET("/ping", func(c *gin.Context) {
 			response.Success(c, nil, "API is running")
 		})
@@ -47,4 +53,11 @@ func SetupRouter(modules *Modules, cfg *configs.Config, validator middleware.Tok
 	}
 
 	return r
+}
+
+// RegisterCronRoutes creates the secret-protected group for cron handlers.
+func RegisterCronRoutes(api *gin.RouterGroup, secret string) *gin.RouterGroup {
+	cron := api.Group("/cron")
+	cron.Use(middleware.CronAuth(secret))
+	return cron
 }

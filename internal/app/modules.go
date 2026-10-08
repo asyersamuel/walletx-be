@@ -71,7 +71,7 @@ func buildModules(
 	if err != nil {
 		return nil, fmt.Errorf("initialize receipt storage: %w", err)
 	}
-	transactionsMod, err := transactions.NewModule(queries, appLogger, embeddingProvider, toolGenerator, aiService, aiRepository, receiptStorage, cfg.Receipt.ExtractionTimeout)
+	transactionsMod, err := transactions.NewModule(queries, appLogger, embeddingProvider, toolGenerator, aiService, aiRepository, receiptStorage, cfg.Receipt.ExtractionTimeout, receiptStorage, cfg.Cron)
 	if err != nil {
 		return nil, fmt.Errorf("initialize transactions module: %w", err)
 	}
@@ -87,7 +87,12 @@ func buildModules(
 	}, nil
 }
 
-func buildReceiptStorage(cfg configs.ReceiptStorageConfig) (transactions.ReceiptStorage, error) {
+type receiptStore interface {
+	transactions.ReceiptStorage
+	transactions.ReceiptReader
+}
+
+func buildReceiptStorage(cfg configs.ReceiptStorageConfig) (receiptStore, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

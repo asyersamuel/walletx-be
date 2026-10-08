@@ -28,8 +28,8 @@ func TestOperationErrorSafeLogFields(t *testing.T) {
 		{"untrusted status", genai.APIError{Code: 404, Status: private, Message: "api_key=" + private}, 404, "", "model_or_endpoint_not_found"},
 		{"timeout", context.DeadlineExceeded, 0, "", "timeout"},
 		{"cancellation", context.Canceled, 0, "", "cancelled"},
-		{"network error", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New(private)}, 0, "", "network_error"},
-		{"SDK error", errors.New(private), 0, "", "sdk_error"},
+		{"network error", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("api_key=" + private)}, 0, "", "network_error"},
+		{"SDK error", errors.New("api_key=" + private), 0, "", "sdk_error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := providerFailure("stream Gemini chat", tc.cause)

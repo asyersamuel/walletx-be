@@ -10,15 +10,48 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	domain "walletx-be/internal/modules/transactions/contracts"
 	apperrors "walletx-be/internal/shared/errors"
 )
+
+func TestLocalReadReceiptValidation(t *testing.T) {
+	store, err := NewLocal(t.TempDir())
+	require.NoError(t, err)
+	owner := uuid.New()
+	ref, err := store.SaveReceipt(context.Background(), owner, "image/png", "receipt.png", []byte("\x89PNG\r\n\x1a\n"))
+	require.NoError(t, err)
+	name, err := receiptPath(context.Background(), owner, ref)
+	require.NoError(t, err)
+	for _, image := range [][]byte{
+		nil, []byte("not an image"), make([]byte, domain.MaxReceiptBytes+1),
+		append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, domain.MaxReceiptBytes-8)...),
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(store.directory, name), image, 0600))
+		got, err := store.ReadReceipt(context.Background(), owner, ref)
+		if len(image) == domain.MaxReceiptBytes {
+			require.NoError(t, err)
+			require.Equal(t, image, got)
+		} else {
+			require.ErrorIs(t, err, apperrors.ErrInternal)
+			require.Nil(t, got)
+		}
+	}
+	_, err = store.ReadReceipt(nil, owner, ref)
+	require.ErrorIs(t, err, apperrors.ErrInvalidInput)
+	_, err = store.ReadReceipt(context.Background(), uuid.Nil, ref)
+	require.ErrorIs(t, err, apperrors.ErrInvalidInput)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = store.ReadReceipt(ctx, owner, ref)
+	require.ErrorIs(t, err, context.Canceled)
+}
 
 func TestLocal_SaveSurvivesAdapterRestartAndDeletes(t *testing.T) {
 	directory := t.TempDir()
 	store, err := NewLocal(directory)
 	require.NoError(t, err)
 	owner := uuid.New()
-	image := []byte("receipt bytes")
+	image := []byte("\x89PNG\r\n\x1a\n")
 	reference, err := store.SaveReceipt(context.Background(), owner, "image/png", "../../sensitive.png", image)
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(reference, "receipt://"+owner.String()+"/"))

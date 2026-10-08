@@ -8,6 +8,37 @@ import (
 	apperrors "walletx-be/internal/shared/errors"
 )
 
+func TestCronSecretLoadedFromEnvironment(t *testing.T) {
+	t.Setenv("CRON_SECRET", "")
+	require.Empty(t, Load().Cron.Secret)
+	t.Setenv("CRON_SECRET", "test-cron-secret")
+	require.Equal(t, "test-cron-secret", Load().Cron.Secret)
+}
+
+func TestCronReceiptLimits(t *testing.T) {
+	t.Setenv("CRON_RECEIPT_BATCH_SIZE", "")
+	t.Setenv("CRON_RECEIPT_TIMEOUT", "")
+	cfg := Load().Cron
+	require.Equal(t, 10, cfg.ReceiptBatchSize)
+	require.Equal(t, 8*time.Second, cfg.ReceiptTimeout)
+	require.NoError(t, cfg.Validate())
+	t.Setenv("CRON_RECEIPT_BATCH_SIZE", "20")
+	t.Setenv("CRON_RECEIPT_TIMEOUT", "45s")
+	cfg = Load().Cron
+	require.Equal(t, 20, cfg.ReceiptBatchSize)
+	require.Equal(t, 45*time.Second, cfg.ReceiptTimeout)
+	require.NoError(t, cfg.Validate())
+	for _, size := range []string{"0", "-1", "21", "invalid"} {
+		t.Setenv("CRON_RECEIPT_BATCH_SIZE", size)
+		require.Error(t, Load().Cron.Validate())
+	}
+	t.Setenv("CRON_RECEIPT_BATCH_SIZE", "10")
+	for _, timeout := range []string{"invalid", "0s", "1s", "-1s"} {
+		t.Setenv("CRON_RECEIPT_TIMEOUT", timeout)
+		require.Error(t, Load().Cron.Validate())
+	}
+}
+
 func TestReceiptConfigDefaultsAndOverrides(t *testing.T) {
 	t.Setenv("RECEIPT_STORAGE_PROVIDER", "")
 	t.Setenv("RECEIPT_STORAGE_DIR", "")

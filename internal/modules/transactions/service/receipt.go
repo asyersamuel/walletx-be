@@ -85,8 +85,31 @@ func (s *receiptService) ProcessReceipt(ctx context.Context, userID uuid.UUID, c
 	if ctx.Err() != nil {
 		return result, nil
 	}
-	// The pending INSERT has committed. Only extraction/category resolution use
-	// this timeout; completing the row uses the still-live parent request context.
+	input, err := s.prepareCompletion(ctx, userID, contentType, image)
+	if err != nil {
+		return result, nil
+	}
+	if ctx.Err() != nil {
+		return result, nil
+	}
+	input.TransactionID = pending.ID
+	completed, err := s.transactions.CompletePendingTransaction(ctx, userID, pending.ID, input)
+	if err != nil {
+		return domain.ReceiptResult{}, mapRepositoryError(err)
+	}
+	if completed == nil || completed.ID != pending.ID || completed.UserID != userID {
+		return domain.ReceiptResult{}, apperrors.ErrInternal
+	}
+	result.Status, result.Transaction = domain.TransactionStatusSuccess, completed
+	return result, nil
+}
+
+// prepareCompletion shares extraction and ownership validation between uploads
+// and cron retries. It never uploads, inserts, or changes transaction status.
+func (s *receiptService) prepareCompletion(ctx context.Context, userID uuid.UUID, contentType string, image []byte) (domain.CompletePendingTransactionInput, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.CompletePendingTransactionInput{}, err
+	}
 	extractionCtx, cancel := context.WithTimeout(ctx, s.extractionTimeout)
 	defer cancel()
 	extracted, err := s.extractor.ExtractTransaction(extractionCtx, ai.ExtractionInput{
@@ -97,12 +120,12 @@ func (s *receiptService) ProcessReceipt(ctx context.Context, userID uuid.UUID, c
 	}
 	if err != nil {
 		s.logDependencyFailure(err, "extract_receipt", "ai")
-		return result, nil
+		return domain.CompletePendingTransactionInput{}, err
 	}
 	date, err := time.ParseInLocation(time.DateOnly, extracted.Date, s.location)
 	if err != nil || extracted.CategoryID == uuid.Nil || strings.TrimSpace(extracted.Merchant) == "" || extracted.Amount <= 0 || math.IsNaN(extracted.Amount) || math.IsInf(extracted.Amount, 0) {
 		s.logDependencyFailure(apperrors.ErrInvalidInput, "validate_receipt_extraction", "ai")
-		return result, nil
+		return domain.CompletePendingTransactionInput{}, apperrors.ErrInvalidInput
 	}
 	categories, err := s.categories.ListByUser(extractionCtx, userID)
 	if err == nil {
@@ -110,7 +133,7 @@ func (s *receiptService) ProcessReceipt(ctx context.Context, userID uuid.UUID, c
 	}
 	if err != nil {
 		s.logDependencyFailure(err, "resolve_receipt_category", "database")
-		return result, nil
+		return domain.CompletePendingTransactionInput{}, err
 	}
 	categoryName := ""
 	for _, category := range categories {
@@ -121,23 +144,12 @@ func (s *receiptService) ProcessReceipt(ctx context.Context, userID uuid.UUID, c
 	}
 	if strings.TrimSpace(categoryName) == "" {
 		s.logDependencyFailure(apperrors.ErrNotFound, "validate_receipt_category", "database")
-		return result, nil
+		return domain.CompletePendingTransactionInput{}, apperrors.ErrNotFound
 	}
-	if ctx.Err() != nil {
-		return result, nil
-	}
-	completed, err := s.transactions.CompletePendingTransaction(ctx, userID, pending.ID, domain.CompletePendingTransactionInput{
-		UserID: userID, TransactionID: pending.ID, CategoryID: extracted.CategoryID, CategoryName: categoryName,
+	return domain.CompletePendingTransactionInput{
+		UserID: userID, CategoryID: extracted.CategoryID, CategoryName: categoryName,
 		MerchantName: strings.TrimSpace(extracted.Merchant), Amount: extracted.Amount, TransactionDate: date, Notes: extracted.Notes,
-	})
-	if err != nil {
-		return domain.ReceiptResult{}, mapRepositoryError(err)
-	}
-	if completed == nil || completed.ID != pending.ID || completed.UserID != userID {
-		return domain.ReceiptResult{}, apperrors.ErrInternal
-	}
-	result.Status, result.Transaction = domain.TransactionStatusSuccess, completed
-	return result, nil
+	}, nil
 }
 
 const receiptCleanupTimeout = 5 * time.Second
@@ -151,8 +163,9 @@ func (s *receiptService) cleanupUpload(ctx context.Context, userID uuid.UUID, re
 }
 
 func (s *receiptService) logDependencyFailure(err error, operation, dependency string) {
-	// Preserve safe provider diagnostics through wrapped errors. Arbitrary SDK
-	// messages/causes may contain credentials or receipt contents; never log them.
+	// Preserve provider diagnostics through wrapped errors, including unbounded
+	// provider_raw_error_detail. The provider owns credential/body redaction;
+	// copy its fields unchanged rather than formatting or truncating them here.
 	safe := apperrors.ErrInternal
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):

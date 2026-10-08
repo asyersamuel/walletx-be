@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode"
@@ -11,7 +12,7 @@ import (
 )
 
 // The pinned SDK returns genai.APIError values. Accept pointers and wrapped
-// googleapi errors as well; never fall back to serializing an arbitrary error.
+// googleapi errors as well for structured classification.
 func sdkAPIError(err error) (genai.APIError, bool) {
 	var value genai.APIError
 	if errors.As(err, &value) {
@@ -99,6 +100,73 @@ var providerMessageRedactions = []*regexp.Regexp{
 // Normal diagnostic messages remain verbatim. Credential-like text is
 // redacted and oversized messages are capped so provider output cannot flood logs.
 func redactProviderMessage(message string) string {
+	message = redactProviderDetail(message)
+	runes := []rune(message)
+	if len(runes) > 4096 {
+		return string(runes[:4096]) + " [TRUNCATED]"
+	}
+	return message
+}
+
+// rawProviderLogDetail retains the SDK error chain without a length cap.
+// API details/body may contain receipt contents, so exclude those payloads.
+// Credential redaction is independent of length and applies to every log field.
+func rawProviderLogDetail(cause error, raw string) string {
+	var value genai.APIError
+	var pointer *genai.APIError
+	if errors.As(cause, &value) || (errors.As(cause, &pointer) && pointer != nil) {
+		if pointer != nil {
+			value = *pointer
+		}
+		safe := value
+		if len(safe.Details) > 0 {
+			safe.Details = []map[string]interface{}{{"redacted": "API details"}}
+		}
+		if safe.Status != "" && !safeDiagnosticStatus(safe.Status) {
+			safe.Status = "[REDACTED]"
+		}
+		raw = strings.ReplaceAll(raw, value.Error(), safe.Error())
+	}
+	var googleError *googleapi.Error
+	if errors.As(cause, &googleError) && googleError != nil && googleError.Body != "" {
+		raw = strings.ReplaceAll(raw, googleError.Body, "[REDACTED]")
+	}
+	for i, pattern := range providerMessageRedactions {
+		if i == 2 {
+			// Preserve the HTTP target for network diagnosis while removing
+			// credentials, query values and fragments from SDK URL errors.
+			raw = pattern.ReplaceAllStringFunc(raw, func(target string) string {
+				u, err := url.Parse(target)
+				if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+					return "[REDACTED]"
+				}
+				u.User = nil
+				query := u.Query()
+				for key := range query {
+					query[key] = []string{"[REDACTED]"}
+				}
+				u.RawQuery = query.Encode()
+				if u.Fragment != "" {
+					u.Fragment = "[REDACTED]"
+				}
+				return u.String()
+			})
+		} else {
+			raw = pattern.ReplaceAllString(raw, "[REDACTED]")
+		}
+	}
+	return raw
+}
+
+func safeDiagnosticStatus(status string) bool {
+	switch status {
+	case "INVALID_ARGUMENT", "FAILED_PRECONDITION", "PERMISSION_DENIED", "UNAUTHENTICATED", "RESOURCE_EXHAUSTED", "NOT_FOUND", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED", "CANCELLED", "UNKNOWN":
+		return true
+	}
+	return false
+}
+
+func redactProviderDetail(message string) string {
 	for _, pattern := range providerMessageRedactions {
 		message = pattern.ReplaceAllString(message, "[REDACTED]")
 	}
@@ -108,9 +176,5 @@ func redactProviderMessage(message string) string {
 		}
 		return r
 	}, message)
-	runes := []rune(message)
-	if len(runes) > 4096 {
-		return string(runes[:4096]) + " [TRUNCATED]"
-	}
 	return message
 }

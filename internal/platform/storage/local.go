@@ -23,6 +23,7 @@ type Local struct {
 }
 
 var _ domain.ReceiptStorage = (*Local)(nil)
+var _ domain.ReceiptReader = (*Local)(nil)
 
 func NewLocal(directory string) (*Local, error) {
 	if strings.TrimSpace(directory) == "" {
@@ -107,8 +108,8 @@ func (s *Local) ReadReceipt(ctx context.Context, userID uuid.UUID, reference str
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if len(image) > domain.MaxReceiptBytes {
-		return nil, fmt.Errorf("stored receipt exceeds maximum size: %w", apperrors.ErrInternal)
+	if err := validateStoredReceipt(image); err != nil {
+		return nil, err
 	}
 	return image, nil
 }

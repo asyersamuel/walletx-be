@@ -475,6 +475,10 @@ func (p *provider) ready(ctx context.Context, model string) error {
 
 func providerFailure(operation string, cause error, models ...string) error {
 	e := &operationError{operation: operation, cause: cause}
+	if !nilSDKError(cause) {
+		// Capture the SDK's error chain before our Error method summarizes it.
+		e.ProviderRawErrorDetail = cause.Error()
+	}
 	if len(models) > 0 {
 		e.model = models[0]
 	}
@@ -484,9 +488,10 @@ func providerFailure(operation string, cause error, models ...string) error {
 // SDK error messages can include response content. Keep boundary log messages
 // safe while retaining the original cause for errors.Is/errors.As inspection.
 type operationError struct {
-	operation string
-	cause     error
-	model     string
+	operation              string
+	cause                  error
+	model                  string
+	ProviderRawErrorDetail string
 }
 
 func (e *operationError) Error() string {
@@ -517,8 +522,8 @@ func (e *operationError) Unwrap() []error {
 	return []error{apperrors.ErrInternal, e.cause}
 }
 
-// SafeLogFields includes bounded, redacted SDK messages and selected ErrorInfo
-// details. Response bodies, headers and arbitrary detail metadata are excluded.
+// SafeLogFields includes redacted SDK diagnostics. Raw error detail has no
+// length limit; response bodies and arbitrary API metadata remain excluded.
 func (e *operationError) SafeLogFields() map[string]interface{} {
 	fields := map[string]interface{}{
 		"dependency":         "gemini",
@@ -530,6 +535,9 @@ func (e *operationError) SafeLogFields() map[string]interface{} {
 	if nilSDKError(e.cause) {
 		fields["provider_reason"] = "sdk_error"
 		return fields
+	}
+	if e.ProviderRawErrorDetail != "" {
+		fields["provider_raw_error_detail"] = rawProviderLogDetail(e.cause, e.ProviderRawErrorDetail)
 	}
 	var parseError *extractionParseError
 	if errors.As(e.cause, &parseError) && parseError != nil {

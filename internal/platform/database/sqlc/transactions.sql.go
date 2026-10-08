@@ -242,6 +242,50 @@ func (q *Queries) DeleteTransaction(ctx context.Context, arg DeleteTransactionPa
 	return result.RowsAffected(), nil
 }
 
+const getPendingTransactions = `-- name: GetPendingTransactions :many
+select id, user_id, receipt_image_url, created_at, updated_at, status
+from public.transactions
+where status = 'pending'
+order by created_at asc, id asc
+limit $1::int
+`
+
+type GetPendingTransactionsRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	ReceiptImageUrl *string            `json:"receipt_image_url"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Status          string             `json:"status"`
+}
+
+func (q *Queries) GetPendingTransactions(ctx context.Context, batchLimit int32) ([]GetPendingTransactionsRow, error) {
+	rows, err := q.db.Query(ctx, getPendingTransactions, batchLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetPendingTransactionsRow{}
+	for rows.Next() {
+		var i GetPendingTransactionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ReceiptImageUrl,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getTransactionByID = `-- name: GetTransactionByID :one
 select id, user_id, category_id, merchant_name, amount, transaction_date,
     receipt_image_url, notes, created_at, updated_at, status

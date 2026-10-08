@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"walletx-be/configs"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -105,8 +106,10 @@ func TestModuleChatReachesGemini(t *testing.T) {
 			aiRepository := aipostgres.NewRepository(queries)
 			receiptStorage, err := storage.NewLocal(t.TempDir())
 			require.NoError(t, err)
-			module, err := NewModule(queries, appLogger, nil, gemini.NewTransactionLLM(client, "chat-test"), ai.NewAIService(provider, aiRepository, aiRepository), categories, receiptStorage, time.Second)
+			module, err := NewModule(queries, appLogger, nil, gemini.NewTransactionLLM(client, "chat-test"), ai.NewAIService(provider, aiRepository, aiRepository), categories, receiptStorage, time.Second, receiptStorage, configs.CronConfig{ReceiptBatchSize: 10, ReceiptTimeout: 8 * time.Second})
 			require.NoError(t, err)
+			require.NotNil(t, module.CronHandler)
+			require.NotNil(t, module.PendingReceipts)
 			router := gin.New()
 			protected := router.Group("/api/v1", middleware.AuthMiddleware(moduleTokenValidator{owner: owner}))
 			transactionhttp.RegisterProtectedRoutes(protected, module.Handler)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func (receiptDiagnosticError) SafeLogError() error {
 	return errors.New("Gemini HTTP 404 NOT_FOUND: model_access_restricted")
 }
 func (receiptDiagnosticError) SafeLogFields() map[string]interface{} {
-	return map[string]interface{}{"provider_http_code": 404, "provider_status": "NOT_FOUND", "provider_reason": "model_access_restricted", "provider_model": "gemini-test", "provider_exact_message": "Consumer invalid", "provider_error_reason": "CONSUMER_INVALID"}
+	return map[string]interface{}{"provider_http_code": 404, "provider_status": "NOT_FOUND", "provider_reason": "model_access_restricted", "provider_model": "gemini-test", "provider_exact_message": "Consumer invalid", "provider_error_reason": "CONSUMER_INVALID", "provider_raw_error_detail": strings.Repeat("SDK error detail; ", 1000) + "context deadline exceeded"}
 }
 
 func TestReceiptDependencyLogPreservesWrappedDiagnostics(t *testing.T) {
@@ -46,6 +47,7 @@ func TestReceiptDependencyLogPreservesWrappedDiagnostics(t *testing.T) {
 	require.Equal(t, "CONSUMER_INVALID", log.fields["provider_error_reason"])
 	require.Contains(t, log.errorValue.Error(), "model_access_restricted")
 	require.NotContains(t, log.errorValue.Error(), "secret")
+	require.Equal(t, receiptDiagnosticError{}.SafeLogFields()["provider_raw_error_detail"], log.fields["provider_raw_error_detail"])
 }
 
 type receiptCategoriesFunc func(context.Context, uuid.UUID) ([]ai.CategoryOption, error)

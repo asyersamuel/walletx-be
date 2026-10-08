@@ -34,6 +34,7 @@ type Supabase struct {
 }
 
 var _ domain.ReceiptStorage = (*Supabase)(nil)
+var _ domain.ReceiptReader = (*Supabase)(nil)
 
 // NewSupabase requires a project origin, a server-side service-role key and a
 // client with a positive timeout. It performs no network requests. HTTP is
@@ -113,6 +114,47 @@ func (s *Supabase) DeleteReceipt(ctx context.Context, userID uuid.UUID, referenc
 		return &supabaseOperationError{operation: "prepare receipt deletion", cause: err}
 	}
 	return s.send(ctx, http.MethodDelete, s.objectEndpoint(), "application/json", body, "delete receipt")
+}
+
+// ReadReceipt downloads an owned object from the private receipts bucket.
+func (s *Supabase) ReadReceipt(ctx context.Context, userID uuid.UUID, reference string) ([]byte, error) {
+	if ctx == nil || userID == uuid.Nil {
+		return nil, apperrors.ErrInvalidInput
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !validSupabaseReceiptReference(userID, reference) {
+		return nil, apperrors.ErrInvalidInput
+	}
+	u := s.baseURL
+	u.Path = "/storage/v1/object/authenticated/" + supabaseReceiptBucket + "/" + reference
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, &supabaseOperationError{operation: "prepare receipt download", cause: err}
+	}
+	req.Header.Set("Authorization", "Bearer "+s.serviceRoleKey)
+	req.Header.Set("apikey", s.serviceRoleKey)
+	response, err := s.client.Do(req)
+	if err != nil {
+		return nil, &supabaseOperationError{operation: "download receipt", cause: err}
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxSupabaseResponseDrain))
+		return nil, &supabaseOperationError{operation: "download receipt", status: response.StatusCode}
+	}
+	image, err := io.ReadAll(io.LimitReader(response.Body, domain.MaxReceiptBytes+1))
+	if err != nil {
+		return nil, &supabaseOperationError{operation: "read receipt download", cause: err}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := validateStoredReceipt(image); err != nil {
+		return nil, &supabaseOperationError{operation: "validate receipt download", cause: err}
+	}
+	return image, nil
 }
 
 func (s *Supabase) objectEndpoint() string {

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,182 @@ import (
 	domain "walletx-be/internal/modules/transactions/contracts"
 	apperrors "walletx-be/internal/shared/errors"
 )
+
+func TestSupabaseReadReceipt(t *testing.T) {
+	for _, image := range [][]byte{
+		[]byte("\x89PNG\r\n\x1a\n"), []byte("\xff\xd8\xff"), []byte("GIF89a"), []byte("RIFF\x00\x00\x00\x00WEBPVP8 "),
+	} {
+		requests := make(chan supabaseRequest, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests <- captureSupabaseRequest(r)
+			// Octet-stream must not prevent identifying a supported image by bytes.
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(image)
+		}))
+		store := newTestSupabase(t, server)
+		owner := uuid.New()
+		reference := testReceiptReference(owner)
+		got, err := store.ReadReceipt(context.Background(), owner, reference)
+		server.Close()
+		require.NoError(t, err)
+		require.Equal(t, image, got)
+		request := <-requests
+		require.NoError(t, request.err)
+		require.Equal(t, http.MethodGet, request.method)
+		require.Equal(t, "/storage/v1/object/authenticated/receipts/"+reference, request.path)
+		require.Empty(t, request.query)
+		require.Empty(t, request.body)
+		require.Equal(t, "Bearer "+testSupabaseKey, request.headers.Get("Authorization"))
+		require.Equal(t, testSupabaseKey, request.headers.Get("apikey"))
+	}
+}
+
+func TestSupabaseReadInvalidReferencesNeverSend(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	t.Cleanup(server.Close)
+	store := newTestSupabase(t, server)
+	owner := uuid.New()
+	ref := testReceiptReference(owner)
+	for _, invalid := range []string{
+		"", testReceiptReference(uuid.New()), "https://example.com/" + ref,
+		owner.String() + "/../" + ref, ref + "?token=secret", ref + "#fragment",
+		strings.Replace(ref, ".png", ".exe", 1), strings.Replace(ref, "1791334800000", "0", 1),
+		strings.Replace(ref, "1791334800000", "01791334800000", 1),
+		owner.String() + "/" + uuid.Nil.String() + "_123.png",
+	} {
+		got, err := store.ReadReceipt(context.Background(), owner, invalid)
+		require.ErrorIs(t, err, apperrors.ErrInvalidInput)
+		require.Nil(t, got)
+	}
+	_, err := store.ReadReceipt(nil, owner, ref)
+	require.ErrorIs(t, err, apperrors.ErrInvalidInput)
+	_, err = store.ReadReceipt(context.Background(), uuid.Nil, ref)
+	require.ErrorIs(t, err, apperrors.ErrInvalidInput)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = store.ReadReceipt(ctx, owner, ref)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, calls.Load())
+}
+
+func TestSupabaseReadResponseValidationAndBodyLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		image  []byte
+		valid  bool
+	}{
+		{"empty", 200, nil, false},
+		{"HTML pretending to be image", 200, []byte("<html>sensitive receipt</html>"), false},
+		{"at size limit", 200, append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, domain.MaxReceiptBytes-8)...), true},
+		{"oversized", 200, append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, domain.MaxReceiptBytes+100)...), false},
+		{"partial content", 206, []byte("\x89PNG\r\n\x1a\n"), false},
+		{"missing", 404, []byte("sensitive " + testSupabaseKey), false},
+		{"unauthorized", 401, []byte("sensitive " + testSupabaseKey), false},
+		{"forbidden", 403, []byte("sensitive " + testSupabaseKey), false},
+		{"rate limited", 429, []byte("sensitive " + testSupabaseKey), false},
+		{"provider failure", 500, bytes.Repeat([]byte("sensitive"), 20000), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &trackedSupabaseBody{reader: bytes.NewReader(tc.image)}
+			client := &http.Client{Timeout: time.Second, Transport: supabaseRoundTripper(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": {"image/png"}}, Body: body}, nil
+			})}
+			store, err := NewSupabase("https://project.supabase.co", testSupabaseKey, client)
+			require.NoError(t, err)
+			owner := uuid.New()
+			got, err := store.ReadReceipt(context.Background(), owner, testReceiptReference(owner))
+			require.True(t, body.closed)
+			require.LessOrEqual(t, body.read, domain.MaxReceiptBytes+1)
+			if tc.valid {
+				require.NoError(t, err)
+				require.Equal(t, tc.image, got)
+			} else {
+				require.Error(t, err)
+				require.Nil(t, got)
+				require.NotContains(t, err.Error(), testSupabaseKey)
+				require.NotContains(t, err.Error(), "sensitive")
+				if tc.status != http.StatusOK {
+					require.Contains(t, err.Error(), strconv.Itoa(tc.status))
+					require.LessOrEqual(t, body.read, maxSupabaseResponseDrain)
+				} else {
+					require.ErrorIs(t, err, apperrors.ErrInternal)
+				}
+			}
+		})
+	}
+}
+
+type failingReceiptBody struct{ err error }
+
+func (b failingReceiptBody) Read([]byte) (int, error) { return 0, b.err }
+
+func TestSupabaseReadTransportAndBodyErrors(t *testing.T) {
+	for _, bodyFailure := range []bool{false, true} {
+		cause := errors.New("sensitive transport or body details")
+		body := &trackedSupabaseBody{reader: failingReceiptBody{err: cause}}
+		client := &http.Client{Timeout: time.Second, Transport: supabaseRoundTripper(func(*http.Request) (*http.Response, error) {
+			if !bodyFailure {
+				return nil, cause
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
+		})}
+		store, err := NewSupabase("https://project.supabase.co", testSupabaseKey, client)
+		require.NoError(t, err)
+		owner := uuid.New()
+		got, err := store.ReadReceipt(context.Background(), owner, testReceiptReference(owner))
+		require.Nil(t, got)
+		require.ErrorIs(t, err, cause)
+		require.NotContains(t, err.Error(), "sensitive")
+		if bodyFailure {
+			require.True(t, body.closed)
+		}
+	}
+}
+
+func TestSupabaseReadTimeoutAndCancellation(t *testing.T) {
+	for _, cancellation := range []bool{false, true} {
+		t.Run(strconv.FormatBool(cancellation), func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(started)
+				select {
+				case <-r.Context().Done():
+				case <-release:
+				}
+			}))
+			t.Cleanup(server.Close)
+			t.Cleanup(func() { close(release) })
+			client := server.Client()
+			client.Timeout = 100 * time.Millisecond
+			if cancellation {
+				client.Timeout = 5 * time.Second
+			}
+			store, err := NewSupabase(server.URL, testSupabaseKey, client)
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if cancellation {
+				go func() {
+					select {
+					case <-started:
+						cancel()
+					case <-ctx.Done():
+					}
+				}()
+			}
+			owner := uuid.New()
+			got, err := store.ReadReceipt(ctx, owner, testReceiptReference(owner))
+			require.Nil(t, got)
+			want := context.DeadlineExceeded
+			if cancellation {
+				want = context.Canceled
+			}
+			require.ErrorIs(t, err, want)
+		})
+	}
+}
 
 const testSupabaseKey = "dummy-service-role-key"
 
@@ -390,5 +567,7 @@ func TestSupabaseRejectsRedirectWithoutMutatingClient(t *testing.T) {
 	require.Empty(t, ref)
 	require.Error(t, err)
 	require.Error(t, store.DeleteReceipt(context.Background(), owner, testReceiptReference(owner)))
+	_, err = store.ReadReceipt(context.Background(), owner, testReceiptReference(owner))
+	require.Error(t, err)
 	require.Zero(t, forwarded.Load())
 }

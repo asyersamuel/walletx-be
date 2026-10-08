@@ -16,6 +16,7 @@ var (
 	initializationErr error
 	appOnce           sync.Once
 	appLogger         = platformlogger.NewLogger()
+	healthHandler     = app.NewHealthRouter(appLogger)
 )
 
 func initializeApp() {
@@ -36,6 +37,10 @@ func initializeApp() {
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == app.HealthPath {
+		healthHandler.ServeHTTP(w, r)
+		return
+	}
 	appOnce.Do(initializeApp)
 	if initializationErr != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

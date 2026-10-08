@@ -20,6 +20,8 @@ const DefaultListLimit = 20
 
 const MaxReceiptBytes = 10 << 20
 
+const MaxPendingReceiptBatchSize = 20
+
 // Transaction represents either a pending or completed transaction. For pending
 // rows only, empty MerchantName, zero Amount and zero TransactionDate represent
 // absent extraction fields. These sentinels cannot be valid success values and
@@ -62,6 +64,29 @@ type PendingTransaction struct {
 	ReceiptImageURL string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+}
+
+// PendingReceiptReader is an internal, cross-owner port for scheduled processing.
+// The caller must supply a limit between 1 and MaxPendingReceiptBatchSize.
+type PendingReceiptReader interface {
+	GetPendingTransactions(ctx context.Context, limit int) ([]PendingTransaction, error)
+}
+
+// ReceiptReader retrieves a bounded, supported image using an owned opaque reference.
+type ReceiptReader interface {
+	ReadReceipt(ctx context.Context, userID uuid.UUID, reference string) ([]byte, error)
+}
+
+type PendingReceiptSummary struct {
+	Fetched      int  `json:"fetched"`
+	Succeeded    int  `json:"succeeded"`
+	Failed       int  `json:"failed"`
+	Deferred     int  `json:"deferred"`
+	StoppedEarly bool `json:"stopped_early"`
+}
+
+type PendingReceiptProcessor interface {
+	ProcessPendingReceipts(ctx context.Context) (PendingReceiptSummary, error)
 }
 
 type CreatePendingTransactionInput struct {

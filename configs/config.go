@@ -14,6 +14,8 @@ const DefaultChatModel = "gemini-3.5-flash"
 const DefaultReceiptExtractionTimeout = 20 * time.Second
 const DefaultReceiptStorageDirectory = ".data/receipts"
 const DefaultReceiptStorageTimeout = 30 * time.Second
+const DefaultCronReceiptBatchSize = 10
+const DefaultCronReceiptTimeout = 8 * time.Second
 
 type Config struct {
 	Server         ServerConfig
@@ -24,6 +26,20 @@ type Config struct {
 	AI             AIConfig
 	ReceiptStorage ReceiptStorageConfig
 	Receipt        ReceiptConfig
+	Cron           CronConfig
+}
+
+type CronConfig struct {
+	Secret           string
+	ReceiptBatchSize int
+	ReceiptTimeout   time.Duration
+}
+
+func (c CronConfig) Validate() error {
+	if c.ReceiptBatchSize < 1 || c.ReceiptBatchSize > 20 || c.ReceiptTimeout <= time.Second {
+		return fmt.Errorf("cron receipt batch size must be 1-20 and timeout must exceed one second: %w", apperrors.ErrInvalidInput)
+	}
+	return nil
 }
 
 type ReceiptStorageConfig struct {
@@ -123,7 +139,24 @@ func Load() *Config {
 		Receipt: ReceiptConfig{
 			ExtractionTimeout: getEnvAsDuration("RECEIPT_AI_TIMEOUT", DefaultReceiptExtractionTimeout),
 		},
+		Cron: CronConfig{
+			Secret:           getEnv("CRON_SECRET", ""),
+			ReceiptBatchSize: getCronReceiptBatchSize(),
+			ReceiptTimeout:   getEnvAsDuration("CRON_RECEIPT_TIMEOUT", DefaultCronReceiptTimeout),
+		},
 	}
+}
+
+func getCronReceiptBatchSize() int {
+	value := os.Getenv("CRON_RECEIPT_BATCH_SIZE")
+	if value == "" {
+		return DefaultCronReceiptBatchSize
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0 // Preserve invalid configuration for startup validation.
+	}
+	return parsed
 }
 
 // Explicitly invalid values become zero so dependency construction rejects them

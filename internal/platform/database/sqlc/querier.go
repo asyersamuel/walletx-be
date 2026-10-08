@@ -36,6 +36,7 @@ type Querier interface {
 	// rows, which the repository maps to ErrNotFound. The related category is never
 	// touched. Returns the number of rows affected.
 	DeleteTransaction(ctx context.Context, arg DeleteTransactionParams) (int64, error)
+	GetPendingTransactions(ctx context.Context, batchLimit int32) ([]GetPendingTransactionsRow, error)
 	// Ownership isolation is enforced in the WHERE clause: the user_id predicate
 	// is combined with the transaction id, so requesting a transaction that exists
 	// but belongs to another user returns zero rows (pgx.ErrNoRows -> ErrNotFound).
